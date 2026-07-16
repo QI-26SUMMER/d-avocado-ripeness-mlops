@@ -1,0 +1,37 @@
+# Exclude from the build context (smaller image, faster upload)
+.git
+.gitignore
+.dockerignore
+
+# Experiment artifacts (regenerated inside the container; stored durably in GCS)
+outputs/
+runs/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+wandb/
+
+# Python cache / virtualenvs
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# Large / unnecessary (not needed in the container)
+notebooks/
+docs/
+my_photos/
+
+# Dataset images: not in the repo, but excluded defensively (keep the xlsx - do not exclude all of data/)
+data/Hass Avocado Ripening Photographic Dataset/
+# The dataset zip is not baked into the container (unzipped from GCS at runtime). Avoids image bloat.
+*.zip
+data/*.zip
+
+# OS temp files
+.DS_Store
+Thumbs.db
+~$*

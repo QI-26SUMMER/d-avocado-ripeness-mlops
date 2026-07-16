@@ -1,0 +1,36 @@
+# What to exclude from the `gcloud builds submit` source upload (separate from .dockerignore - this shrinks the upload itself).
+# Only the code + data/'s xlsx need to be uploaded. The dataset zip/images are unzipped from GCS at runtime.
+
+# Dataset zip / images (not needed in the container, saves upload time/cost)
+*.zip
+data/*.zip
+data/Hass Avocado Ripening Photographic Dataset/
+
+# Version control / artifacts
+.git/
+.gitignore
+outputs/
+runs/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+wandb/
+
+# Python cache / virtualenvs
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# Large / unnecessary
+notebooks/
+docs/
+my_photos/
+
+# OS temp files
+.DS_Store
+Thumbs.db
+~$*
