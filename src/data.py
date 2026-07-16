@@ -1,0 +1,127 @@
+"""Data loading / splitting / label derivation.
+
+Enforces the pitfalls from CLAUDE.md §2 in code:
+  - §2.1 individual-level split (image-level split X)
+  - §2.2 verify Sample global uniqueness -> group key
+  - §2.6 derive days_left + right-censoring flag
+  - §3 skeleton: filter out 12 missing images
+
+Facts verified by EDA (no guessing, CLAUDE.md §1):
+  images 14,710 / metadata rows 14,722 / missing 12 / individuals 478 / labels 1-5 ordinal.
+"""
+from __future__ import annotations
+
+import os
+import re
+from pathlib import Path
+
+import pandas as pd
+
+# --- Paths -------------------------------------------------------------------
+# xlsx was moved to the data/ root. Images live under one nested layer of folders, per CLAUDE.md §1.
+# Default is the one-level-nested local path from CLAUDE.md §1. When running on GCP (Vertex),
+# the container copies the images to local SSD and points AVOCADO_IMAGE_DIR at that path
+# (no effect on local runs).
+IMAGE_DIR = Path(
+    os.environ.get(
+        "AVOCADO_IMAGE_DIR",
+        str(
+            DATA_DIR
+            / "Hass Avocado Ripening Photographic Dataset"
+            / "Hass Avocado Ripening Photographic Dataset"
+            / "Avocado Ripening Dataset"
+        ),
+    )
+)
+
+# Label definitions (CLAUDE.md §1). 4=peak (end of shelf life), 5=past peak. Service window=3-4.
+LABELS = {1: "Unripe", 2: "Breaking", 3: "Ripe(1)", 4: "Ripe(2)/peak", 5: "Overripe"}
+NUM_CLASSES = 5
+
+FILENAME_RE = re.compile(r"^(T\w+)_d(\d+)_(\d+)_([ab])_(\d+)$")
+
+
+def load_metadata(xlsx: Path = META_XLSX) -> pd.DataFrame:
+    """Read the DATABASE sheet and attach columns parsed from the file name."""
+    df = pd.read_excel(xlsx)  # only one sheet (DATABASE)
+    df["Time Stamp"] = pd.to_datetime(df["Time Stamp"])
+
+    parsed = df["File Name"].astype(str).str.extract(FILENAME_RE)
+    if parsed.isna().any().any():
+        raise ValueError("Some rows don't match the file name convention. Check the file name rule in CLAUDE.md §1.")
+    df["group"] = parsed[0]
+    df["day"] = parsed[1].astype(int)
+    df["sample"] = parsed[2].astype(int)
+    df["view"] = parsed[3]
+    df["label"] = df["Ripening Index Classification"].astype(int)
+
+    # File name <-> column consistency (verified: 100% match across 14,722 rows)
+    assert (df["group"] == df["Storage Group"]).all()
+    assert (df["day"] == df["Day of Experiment"]).all()
+    assert (df["sample"] == df["Sample"]).all()
+    assert (parsed[4].astype(int) == df["label"]).all()
+    return df
+
+
+def filter_existing_images(df: pd.DataFrame, image_dir: Path = IMAGE_DIR) -> pd.DataFrame:
+    """§3: explicitly filter out the 12 missing images instead of letting them fail silently."""
+    present = {p.stem for p in image_dir.glob("*.jpg")}
+    keep = df["File Name"].astype(str).isin(present)
+    dropped = int((~keep).sum())
+    if dropped:
+        print(f"[data] Excluded {dropped} missing image(s) (present in metadata but no file on disk)")
+    return df[keep].reset_index(drop=True)
+
+
+def group_key(df: pd.DataFrame) -> pd.Series:
+    """§2.2: verify Sample is globally unique, then build the split key.
+
+    Verification shows Sample is globally unique (0 reuse), but we still use the
+    (group, sample) tuple defensively.
+    """
+    assert df.groupby("Sample")["Storage Group"].nunique().max() == 1, (
+        "Sample ID reused across groups -> Storage Group must be part of the group key (CLAUDE.md §2.2)"
+    )
+    return df["Storage Group"].astype(str) + "_" + df["Sample"].astype(str)
+
+
+def split_by_individual(df: pd.DataFrame, test_size: float = 0.2, seed: int = 42):
+    """§2.1: individual-level split. Must verify no leakage after splitting."""
+    from sklearn.model_selection import GroupShuffleSplit
+
+    groups = group_key(df)
+    gss = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=seed)
+    train_idx, test_idx = next(gss.split(df, groups=groups))
+    train, test = df.iloc[train_idx], df.iloc[test_idx]
+    # Leakage check (CLAUDE.md §2.1)
+    assert set(groups.iloc[train_idx]) & set(groups.iloc[test_idx]) == set(), "Individual leakage!"
+    return train.reset_index(drop=True), test.reset_index(drop=True)
+
+
+def derive_days_left(df: pd.DataFrame) -> pd.DataFrame:
+    """§2.6: days_left isn't in the dataset -- derive it. Leaves a right-censoring flag.
+
+    End of shelf life = the first Day of Experiment on which label 5 is observed for an individual.
+    Individuals that never reach label 5 (verified: 68/478) get censored=True, days_left=NaN.
+    Simply dropping them would introduce a "slow-ripening individual" selection bias (§2.6).
+    """
+    end = (
+        df[df["label"] == 5]
+        .groupby(["Storage Group", "Sample"])["Day of Experiment"]
+        .min()
+        .rename("end_day")
+    )
+    out = df.merge(end, on=["Storage Group", "Sample"], how="left")
+    out["censored"] = out["end_day"].isna()
+    out["days_left"] = out["end_day"] - out["Day of Experiment"]  # NaN for censored individuals
+    return out
+
+
+if __name__ == "__main__":
+    df = load_metadata()
+    df = filter_existing_images(df)
+    print(f"images {len(df)} / individuals {group_key(df).nunique()}")
+    tr, te = split_by_individual(df)
+    print(f"train {len(tr)} / test {len(te)} (individual-level, leakage check passed)")
+    dl = derive_days_left(df)
+    print(f"Right-censored individual-sessions: {int(dl['censored'].sum())}")

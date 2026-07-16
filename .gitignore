@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# Experiment artifacts (recorded separately with seed/config/commit hash)
+outputs/
+runs/
+checkpoints/
+*.ckpt
+*.pth
+*.pt
+wandb/
+
+# Dataset: the images (471 MB) and the raw zip are NOT committed — download via DOI.
+# The metadata spreadsheet (data/Avocado Ripening Dataset.xlsx) IS committed.
+data/*.zip
+data/Hass Avocado Ripening Photographic Dataset/
+
+# Reference material kept locally but NOT committed (paper PDF, figures, reports, notebooks)
+docs/
+notebooks/
+
+# User's own test photos (personal, not committed)
+my_photos/
+
+# OS / Office temp files
+.DS_Store
+Thumbs.db
+~$*

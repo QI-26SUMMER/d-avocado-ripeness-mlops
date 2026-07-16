@@ -1,0 +1,26 @@
+# Paper reproduction experiment config — P3_t10_resnet18_paper_aug_oversample
+# Paper-disclosed settings: epochs>=30, batch 128, lr 0.01(x0.1 every 10 epochs), aug=paper, oversample=train only,
+#   validation every 10 iters / patience 150 checks / best val accuracy (loss as tiebreaker).
+# Not disclosed in paper (implementation choice): optimizer/momentum/weight_decay, split seed.
+experiment_id: P3_t10_resnet18_paper_aug_oversample
+dataset: T10        # general|T10|T20|Tam(=Tamb)
+model: resnet18            # resnet18|alexnet
+augmentation: paper       # paper (geometric augmentation only) | none
+balance: paper_oversample # paper_oversample | none
+pretrained: true
+img_size: 224             # The AlexNet paper (MATLAB) uses 227; here it's torchvision standard 224 (implementation choice)
+batch_size: 128
+epochs: 30
+lr: 0.01
+lr_step: 10
+lr_gamma: 0.1
+seed: 42
+deterministic: true
+num_workers: 4
+optimizer:                # ⚠️ not disclosed in paper → implementation choice
+  name: sgd
+  momentum: 0.9
+  weight_decay: 0.0001
+validation:
+  frequency_iters: 10     # paper: validation checks every 10 iterations
+  patience_checks: 150    # paper: validation patience 150 (MATLAB = number of checks; interpret with care, recorded in report)
