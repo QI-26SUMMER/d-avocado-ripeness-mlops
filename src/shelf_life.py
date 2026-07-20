@@ -20,8 +20,14 @@ Actual Days Left definition (paper): the number of days from the shooting time u
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
-import pandas as pd
+
+# pandas is only referenced in type hints here (strings under `from __future__ import annotations`),
+# never at runtime — so the serving image, which imports this module, does not need pandas.
+if TYPE_CHECKING:
+    import pandas as pd
 
 # 5-stage coefficients (paper Table 4). Maps both 'Tam' and 'Tamb'.
 ALPHA_5STAGE = {

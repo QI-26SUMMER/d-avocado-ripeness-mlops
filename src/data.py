@@ -14,8 +14,13 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pandas as pd
+# pandas is used at runtime only inside load_metadata (imported lazily there). Everywhere else it
+# appears only in type hints (strings under `from __future__ import annotations`), so importing this
+# module for its LABELS constant — as the serving container does — must not require pandas.
+if TYPE_CHECKING:
+    import pandas as pd
 
 # --- Paths -------------------------------------------------------------------
 # These are LOCAL paths (mirrors utils.OUTPUT_DIR's env-override style). On GCP the training
@@ -51,6 +56,8 @@ FILENAME_RE = re.compile(r"^(T\w+)_d(\d+)_(\d+)_([ab])_(\d+)$")
 
 def load_metadata(xlsx: Path = META_XLSX) -> pd.DataFrame:
     """Read the DATABASE sheet and attach columns parsed from the file name."""
+    import pandas as pd  # lazy: only training/EDA needs pandas, not the serving container
+
     df = pd.read_excel(xlsx)  # only one sheet (DATABASE)
     df["Time Stamp"] = pd.to_datetime(df["Time Stamp"])
 
