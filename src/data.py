@@ -18,6 +18,14 @@ from pathlib import Path
 import pandas as pd
 
 # --- Paths -------------------------------------------------------------------
+# These are LOCAL paths (mirrors utils.OUTPUT_DIR's env-override style). On GCP the training
+# entrypoint downloads the dataset from GCS to local SSD first and points the env vars below at
+# it, so by the time this module reads anything the paths are always local. Defined without
+# importing utils on purpose: the serving Dockerfile copies data.py but NOT utils.py.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DATA_DIR = Path(os.environ.get("AVOCADO_DATA_DIR", str(REPO_ROOT / "data")))
+META_XLSX = DATA_DIR / "Avocado Ripening Dataset.xlsx"
+
 # xlsx was moved to the data/ root. Images live under one nested layer of folders, per CLAUDE.md §1.
 # Default is the one-level-nested local path from CLAUDE.md §1. When running on GCP (Vertex),
 # the container copies the images to local SSD and points AVOCADO_IMAGE_DIR at that path
