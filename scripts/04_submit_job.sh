@@ -25,7 +25,11 @@ DISPLAY_NAME="${DISPLAY_NAME:-avocado-${EXP_ID}$([ "$SMOKE" = "1" ] && echo -smo
 # Created in the current directory (avoids the issue where Windows gcloud can't read /tmp paths). Deleted on exit.
 JOB_YAML="./.avocado_job_$$.yaml"
 trap 'rm -f "$JOB_YAML"' EXIT
-cat > "$JOB_YAML" <<EOF
+# Emit a container env entry only when the var is set, so a caller can forward extra controls
+# without editing this file, e.g.  SKIP_TRAIN=1 RUN_EVAL=0 RUN_GMM=1 scripts/04_submit_job.sh
+emit_env() { if [ -n "${2:-}" ]; then printf '        - name: %s\n          value: "%s"\n' "$1" "$2"; fi; }
+{
+  cat <<EOF
 workerPoolSpecs:
   - machineSpec:
       machineType: ${MACHINE}
@@ -35,15 +39,20 @@ workerPoolSpecs:
     containerSpec:
       imageUri: ${IMAGE}
       env:
-        - name: BUCKET
-          value: "${BUCKET}"
-        - name: EXP_ID
-          value: "${EXP_ID}"
-        - name: CONFIG
-          value: "${CONFIG}"
-        - name: SMOKE
-          value: "${SMOKE}"
 EOF
+  emit_env BUCKET "$BUCKET"
+  emit_env EXP_ID "$EXP_ID"
+  emit_env CONFIG "$CONFIG"
+  emit_env SMOKE "$SMOKE"
+  emit_env SKIP_TRAIN "${SKIP_TRAIN:-}"
+  emit_env RUN_EVAL "${RUN_EVAL:-}"
+  emit_env RUN_GMM "${RUN_GMM:-}"
+  emit_env GMM_DATASET "${GMM_DATASET:-}"
+  emit_env GMM_COMPONENTS "${GMM_COMPONENTS:-}"
+  emit_env SKIP_IMAGE_CHECK "${SKIP_IMAGE_CHECK:-}"
+  emit_env EPOCHS "${EPOCHS:-}"
+  emit_env VAL_FREQ "${VAL_FREQ:-}"
+} > "$JOB_YAML"
 
 echo "== Submit Job =="
 echo "  display-name: $DISPLAY_NAME"
