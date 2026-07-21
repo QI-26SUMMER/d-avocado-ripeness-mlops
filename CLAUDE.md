@@ -1,7 +1,8 @@
 CLAUDE.md — Avocado Ripeness Model
 
-The operating manual Claude Code reads when working in this repository. Current stage: data analysis.
-Once the training stage begins, training-related instructions will be added.
+The operating manual Claude Code reads when working in this repository. Current stage: training + serving.
+(EDA done; GCP Vertex custom training in place; a FastAPI prediction container runs on Cloud Run.)
+Next up: real-photo preprocessing for inference (detection/crop before the classifier).
 
 
 Attitude: neural network training fails silently. No error — it just quietly hands you a slightly worse model.
@@ -111,6 +112,15 @@ pythonend = (df[df["Ripening Index Classification"] == 5]
 Some T10 individuals never reached label 5 by the end of the experiment → days_left is undefined for them.
 Simply dropping them creates a selection bias that discards "slow-ripening individuals." Keep a censoring flag instead.
 
+📌 Project decision (2026-07, applies to the current models). We train on a CURATED subset:
+only the 392 samples with a complete 1→5 trajectory — data/avocado_complete_states.csv, also at
+gs://qi-2026summer-avocado/data/. This DELIBERATELY drops the never-reached-5 and mid-gap samples
+this section warns about (86 of 478 samples), trading the fast-ripener selection bias for clean
+trajectories. Enforced in one place: data.filter_to_manifest(), applied when validate_data.py builds
+metadata_clean.csv (→ split.py, dataset.py all inherit it). On GCP the entrypoint points AVOCADO_MANIFEST
+at the GCS copy. Do NOT "fix" this by re-adding the dropped samples; to train on the full set, remove the
+manifest / unset AVOCADO_MANIFEST. Numbers in §1 describe the FULL raw dataset, not this curated subset.
+
 2.7 Do not compare groups using calendar dates
 
 The shooting period runs 2022-04-03 to 2022-05-12 (39 days), yet the maximum Day of Experiment is 26.
@@ -149,16 +159,20 @@ repo/
 ├── CLAUDE.md
 ├── data/
 │   ├── .gitignore                        # excludes all of images/
-│   └── Avocado Ripening Dataset.xlsx     # ✅ committed (small and essential)
-├── docs/
-│   ├── eda.md
-│   └── foods-2024-avocado.pdf            # read only when needed
+│   ├── Avocado Ripening Dataset.xlsx     # ✅ committed (small and essential)
+│   └── avocado_complete_states.csv       # ✅ curated keep-list manifest (392 samples, §2.6). Also in GCS.
+├── docs/                                 # ⚠️ git-ignored (local only): eda/report md's, foods-2024-avocado.pdf, serving-contract.md
+├── docker/entrypoint.sh                  # Vertex training entrypoint (unzip → validate → split → train → eval)
+├── Dockerfile                            # training image
+├── serving/                              # FastAPI prediction container (Cloud Run) — app.py, Dockerfile
 ├── notebooks/
 └── src/
-    ├── data.py      # loader, filters out the 12 missing images, group split
-    ├── models.py
-    ├── train.py
-    └── evaluate.py
+    ├── data.py         # loader, drops 12 missing images, filter_to_manifest, group split
+    ├── validate_data.py# integrity checks → metadata_clean.csv (applies the manifest)
+    ├── split.py        # 70/15/15 sample-level split → splits.csv
+    ├── dataset.py      # torch Dataset/DataLoader (single-image input only, §2.3)
+    ├── models.py  ├── train.py  ├── evaluate.py  ├── predict.py
+    └── shelf_life.py   # days_left (paper) + days_to_target (serving D-day), temp→α
 
 
 Do not commit images to git (471 MB). Provide a script that downloads them via DOI instead.
@@ -185,4 +199,25 @@ Fill in author names by checking the original source directly.
 
 Do not write code that violates §2, especially 2.1 (split by individual) and 2.3 (group leakage).
 If you're not sure, ask instead of guessing. §2.8 already lists facts that turned out to be wrong once.
-Keep code short and explicit. This repository is maintained by a single developer.
+Keep code short and explicit. This CLAUDE.md is shared across the team — keep it current when you change
+data handling or the serving contract.
+
+
+8. Serving contract (backend ↔ AI, keep in sync)
+
+The Spring backend (davocado-server) calls serving/app.py on Cloud Run. Full spec: docs/serving-contract.md
+(git-ignored — forward it to the backend team directly). Invariants that must NOT drift:
+
+  Response fields are snake_case and match the backend's DB columns: predicted_stage (int 1-5, required),
+  model_version (str, required), confidence, stage_probs (a LIST of 5 floats indexed 0..4 — never a dict),
+  days_to_target (float), estimated_peak_date ("YYYY-MM-DD"). Per-image reject = {"error": "..."}.
+
+  days_to_target = α × (predicted_stage − target_stage), clipped at 0. Emitted only when the request sends
+  target_stage (else omitted → backend stores null). This is NOT days_left (paper's days-until-stage-5) —
+  never rename one to the other; the endpoints differ (§1: peak = stage 4, not 5).
+
+  α source: temp_celsius → shelf_life.alpha_from_temp() (⚠ PROVISIONAL log-linear/Q10 interpolation, the
+  temp→α mapping is still being decided) or storage_group → discrete paper coefficients.
+
+  The serving image has NO pandas — data.py / shelf_life.py keep pandas as a lazy/TYPE_CHECKING import.
+  Don't add a top-level pandas import to anything the serving container imports.

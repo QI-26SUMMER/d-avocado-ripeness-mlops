@@ -1,0 +1,12 @@
+# Serving-only dependencies (kept separate from requirements.txt / training).
+# CPU-only torch here (no cu124 index): the serving machine has no GPU
+# (free-trial account has zero GPU quota, same as training), so pulling the
+# CUDA wheels would only bloat the image for nothing.
+torch==2.6.0
+torchvision==0.21.0
+pillow==12.3.0
+numpy==2.5.1
+
+fastapi==0.115.6
+uvicorn==0.34.0
+google-cloud-storage==2.19.0

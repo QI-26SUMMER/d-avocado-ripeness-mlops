@@ -12,6 +12,7 @@ BUCKET="${BUCKET:-qi-2026summer-avocado}"
 CONFIG="${CONFIG:-configs/paper/general_resnet18.yaml}"
 EXP_ID="${EXP_ID:-P1_general_resnet18_paper_aug_oversample}"
 ZIP_PATH="${ZIP_PATH:-/gcs/${BUCKET}/data/raw/avocado.zip}"
+MANIFEST_PATH="${MANIFEST_PATH:-/gcs/${BUCKET}/data/avocado_complete_states.csv}"
 SMOKE="${SMOKE:-0}"
 EPOCHS="${EPOCHS:-}"                     # config epochs override (for practical runs)
 VAL_FREQ="${VAL_FREQ:-}"                 # validation frequency override
@@ -40,6 +41,18 @@ JPG_COUNT="$(find "$AVOCADO_IMAGE_DIR" -maxdepth 1 -name '*.jpg' | wc -l)"
 echo "[entrypoint] IMAGE_DIR=$AVOCADO_IMAGE_DIR  jpg=$JPG_COUNT (expected 14710)"
 
 # --- 2) validate_data + split --------------------------------------------
+# Curated keep-list manifest (excludes never-reached-5 / gap samples, CLAUDE.md §2.6).
+# Read straight from the /gcs mount, same as the zip. Absent -> validate_data trains on
+# the full dataset (filter_to_manifest is a no-op), so this degrades safely.
+if [ -f "$MANIFEST_PATH" ]; then
+  export AVOCADO_MANIFEST="$MANIFEST_PATH"
+  echo "[entrypoint] manifest (GCS) -> $AVOCADO_MANIFEST"
+else
+  # data.py then falls back to the image-bundled data/avocado_complete_states.csv if it
+  # was baked in (it is, unless removed); only if neither exists is the full dataset used.
+  echo "[entrypoint] manifest not in GCS ($MANIFEST_PATH) -> using image-bundled copy if present, else FULL dataset"
+fi
+
 VD_ARGS=()
 [ "$SKIP_IMAGE_CHECK" = "1" ] && VD_ARGS+=(--skip-image-check)
 echo "[entrypoint] python -m src.validate_data ${VD_ARGS[*]-}"
