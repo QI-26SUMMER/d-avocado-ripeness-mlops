@@ -20,6 +20,7 @@ Actual Days Left definition (paper): the number of days from the shooting time u
 """
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -42,6 +43,54 @@ def estimate_days_left(ripening_index, storage_group: str) -> float:
     """Paper Eq(2): α × (index − 5). index is 1-5."""
     alpha = ALPHA_5STAGE[storage_group]
     return float(alpha * (np.asarray(ripening_index, dtype=float) - 5))
+
+
+# ─── Days-to-target (service D-day) ────────────────────────────────────────
+# The backend's `days_to_target` is days until the CURRENT stage advances to the
+# USER'S chosen `target_stage` — not the paper's fixed days-until-stage-5. It is
+# the same linear model, just with the endpoint parameterised:
+#     days_to_target = α × (predicted_stage − target_stage)
+# With target_stage == 5 this collapses back to estimate_days_left exactly, so the
+# service can honour CLAUDE.md §1 (peak = stage 4) by having the caller send
+# target_stage=4, without the paper-reproduction code changing meaning.
+def estimate_days_to_target(predicted_stage, target_stage, alpha: float,
+                            clip_negative: bool = True) -> float:
+    """Generalised shelf-life: days for `predicted_stage` to reach `target_stage`.
+
+    alpha is the per-storage days-per-stage slope (negative, e.g. ALPHA_5STAGE[g]
+    or alpha_from_temp(t)). If the fruit is already at/past the target the raw
+    value is negative; clip_negative maps that to 0.0 ("now").
+    """
+    d = float(alpha) * (float(predicted_stage) - float(target_stage))
+    return max(d, 0.0) if clip_negative else d
+
+
+# ─── Continuous temperature → α  (⚠ PROVISIONAL — CLAUDE.md §4 open item) ──
+# The user provides a continuous temp_celsius but the paper only fits α at the
+# two controlled storage temperatures. Those anchors show |α| almost exactly
+# HALVING from 10°C→20°C (4.390 → 2.116, ratio 2.07), i.e. ripening rate roughly
+# doubles per +10°C — a Q10≈2, which is the textbook produce-respiration behaviour.
+# So we interpolate ln|α| LINEARLY in temperature (log-linear / Arrhenius-like),
+# giving a smooth, physically-motivated curve that hits both anchors.
+#
+# This is the interim choice while the mapping is still being decided. When it is
+# finalised, change ONLY this function — nothing else depends on how α is derived.
+_TEMP_ANCHORS = ((10.0, 4.390), (20.0, 2.116))   # (°C, |α|), paper Table 4
+TEMP_CLAMP = (10.0, 30.0)   # stay within/just past the data; extrapolation is unvalidated
+
+
+def alpha_from_temp(temp_celsius: float) -> float:
+    """PROVISIONAL log-linear (Q10≈2) map from temperature to α (negative,
+    days-per-stage), matching ALPHA_5STAGE's sign convention.
+
+    Input is clamped to TEMP_CLAMP: outside the two anchor temps the curve is an
+    extrapolation the dataset does not back up, so we refuse to run away with it.
+    """
+    (t_lo, a_lo), (t_hi, a_hi) = _TEMP_ANCHORS
+    t = min(max(float(temp_celsius), TEMP_CLAMP[0]), TEMP_CLAMP[1])
+    k = (math.log(a_hi) - math.log(a_lo)) / (t_hi - t_lo)   # d(ln|α|)/d°C
+    magnitude = a_lo * math.exp(k * (t - t_lo))
+    return -magnitude
 
 
 def shelf_life_loss(estimated, actual) -> np.ndarray:
