@@ -19,6 +19,9 @@ VAL_FREQ="${VAL_FREQ:-}"                 # validation frequency override
 SKIP_IMAGE_CHECK="${SKIP_IMAGE_CHECK:-0}"  # if 1, skip item 12 (full corrupted-image scan)
 SKIP_TRAIN="${SKIP_TRAIN:-0}"           # if 1, skip training (evaluate only with existing best.pt)
 RUN_EVAL="${RUN_EVAL:-1}"               # if 1, auto-evaluate the test set after training (evaluate.py). smoke auto-skipped
+RUN_GMM="${RUN_GMM:-1}"                 # if 1, also run the GMM color baseline (independent of ResNet). smoke auto-skipped
+GMM_DATASET="${GMM_DATASET:-general}"   # gmm baseline dataset (general|T10|T20|Tam)
+GMM_COMPONENTS="${GMM_COMPONENTS:-2}"   # gmm baseline: Gaussian components per stage
 
 export AVOCADO_OUTPUT_DIR="/gcs/${BUCKET}/outputs/${EXP_ID}"
 
@@ -80,6 +83,17 @@ if [ "$RUN_EVAL" = "1" ] && [ "$SMOKE" != "1" ]; then
   python -m src.evaluate --config "$CONFIG"
 else
   echo "[entrypoint] skip evaluate (RUN_EVAL=$RUN_EVAL SMOKE=$SMOKE)"
+fi
+
+# --- 5) GMM color baseline (classical-ML comparison; independent of the ResNet model) -----
+# Needs only metadata_clean + splits + images (all present by now), not best.pt. Non-fatal:
+# a baseline hiccup must not fail a job whose training/eval already succeeded. Skipped on smoke.
+if [ "$RUN_GMM" = "1" ] && [ "$SMOKE" != "1" ]; then
+  echo "[entrypoint] python -m src.gmm_baseline --dataset $GMM_DATASET --components $GMM_COMPONENTS"
+  python -m src.gmm_baseline --dataset "$GMM_DATASET" --components "$GMM_COMPONENTS" \
+    || echo "[entrypoint] WARNING: gmm baseline failed (non-fatal; training/eval result stands)"
+else
+  echo "[entrypoint] skip gmm baseline (RUN_GMM=$RUN_GMM SMOKE=$SMOKE)"
 fi
 
 echo "[entrypoint] DONE. outputs -> $AVOCADO_OUTPUT_DIR"
