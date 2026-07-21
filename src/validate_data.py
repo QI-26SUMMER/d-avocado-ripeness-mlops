@@ -16,10 +16,10 @@ from pathlib import Path
 import pandas as pd
 
 try:
-    from .data import IMAGE_DIR, load_metadata
+    from .data import IMAGE_DIR, filter_to_manifest, load_metadata
     from .utils import OUTPUT_DIR, save_json
 except ImportError:
-    from data import IMAGE_DIR, load_metadata
+    from data import IMAGE_DIR, filter_to_manifest, load_metadata
     from utils import OUTPUT_DIR, save_json
 
 
@@ -79,10 +79,15 @@ def run_checks(image_check: bool = True) -> tuple[pd.DataFrame, dict]:
     report["12_corrupt_images_count"] = len(corrupt)
     report["12_corrupt_images"] = corrupt
 
-    # metadata_clean = file actually exists + not corrupt
+    # metadata_clean = file actually exists + not corrupt ...
     clean_mask = df_has & (~df["File Name"].astype(str).isin(set(corrupt)))
     clean = df.loc[clean_mask].reset_index(drop=True)
+    report["metadata_clean_rows_before_manifest"] = int(len(clean))
+    # ... then restrict to the curated keep-list manifest (excludes never-reached-5 /
+    # gap samples; no-op if the manifest is absent). See data.filter_to_manifest + §2.6.
+    clean = filter_to_manifest(clean)
     report["metadata_clean_rows"] = int(len(clean))
+    report["metadata_clean_samples"] = int(clean.groupby(["Storage Group", "Sample"]).ngroups)
     return clean, report
 
 
@@ -107,7 +112,8 @@ def main() -> None:
               "5_unique_samples", "6_samples_per_group", "7_label_range",
               "8_samples_in_multiple_groups", "9_view_ok",
               "10_nonmonotonic_samples", "11_observations_missing_a_or_b",
-              "12_corrupt_images_count", "metadata_clean_rows"]:
+              "12_corrupt_images_count", "metadata_clean_rows_before_manifest",
+              "metadata_clean_rows", "metadata_clean_samples"]:
         print(f"  {k}: {report[k]}")
     if report["4_duplicate_filenames"]:
         print(f"  4_duplicate_filenames: {report['4_duplicate_filenames']}")

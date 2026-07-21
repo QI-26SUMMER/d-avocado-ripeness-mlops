@@ -47,6 +47,11 @@ IMAGE_DIR = Path(
     )
 )
 
+# Curated keep-list manifest (avocado_complete_states.csv): only samples with a complete
+# 1->5 trajectory. On GCP the entrypoint points AVOCADO_MANIFEST at the /gcs-mounted copy;
+# locally it defaults to the repo's data/ copy. Absent -> no exclusion (full dataset).
+MANIFEST_CSV = Path(os.environ.get("AVOCADO_MANIFEST", str(DATA_DIR / "avocado_complete_states.csv")))
+
 # Label definitions (CLAUDE.md §1). 4=peak (end of shelf life), 5=past peak. Service window=3-4.
 LABELS = {1: "Unripe", 2: "Breaking", 3: "Ripe(1)", 4: "Ripe(2)/peak", 5: "Overripe"}
 NUM_CLASSES = 5
@@ -86,6 +91,33 @@ def filter_existing_images(df: pd.DataFrame, image_dir: Path = IMAGE_DIR) -> pd.
     if dropped:
         print(f"[data] Excluded {dropped} missing image(s) (present in metadata but no file on disk)")
     return df[keep].reset_index(drop=True)
+
+
+def filter_to_manifest(df: pd.DataFrame, manifest: Path = MANIFEST_CSV) -> pd.DataFrame:
+    """Keep only rows whose File Name is in the curated keep-list manifest.
+
+    The manifest (avocado_complete_states.csv) lists exactly the images to train on:
+    only samples with a complete 1->5 trajectory. Samples that never reached stage 5
+    or have a gap in the middle were removed by hand upstream.
+
+    ⚠ CLAUDE.md §2.6: dropping never-reached-5 (right-censored) individuals biases the
+    training set toward fast-ripeners. This exclusion is applied ONLY because a curated
+    manifest is present — unset AVOCADO_MANIFEST (or remove the file) to train on the
+    full dataset. No-op when the manifest is absent, so full-dataset runs are unchanged.
+    """
+    import pandas as pd  # lazy: keep the serving container's pandas-free import contract
+
+    if not Path(manifest).exists():
+        print(f"[data] No manifest at {manifest} -> training on full dataset (no exclusion)")
+        return df
+    keep = set(pd.read_csv(manifest)["File Name"].astype(str))
+    mask = df["File Name"].astype(str).isin(keep)
+    kept = df[mask].reset_index(drop=True)
+    n_s0 = df.groupby(["Storage Group", "Sample"]).ngroups
+    n_s1 = kept.groupby(["Storage Group", "Sample"]).ngroups
+    print(f"[data] Manifest {Path(manifest).name}: kept {len(kept)}/{len(df)} images, "
+          f"{n_s1}/{n_s0} samples (excluded {n_s0 - n_s1} samples: never-reached-5 / gap)")
+    return kept
 
 
 def group_key(df: pd.DataFrame) -> pd.Series:
