@@ -19,6 +19,7 @@ VAL_FREQ="${VAL_FREQ:-}"                 # validation frequency override
 SKIP_IMAGE_CHECK="${SKIP_IMAGE_CHECK:-0}"  # if 1, skip item 12 (full corrupted-image scan)
 SKIP_TRAIN="${SKIP_TRAIN:-0}"           # if 1, skip training (evaluate only with existing best.pt)
 RUN_EVAL="${RUN_EVAL:-1}"               # if 1, auto-evaluate the test set after training (evaluate.py). smoke auto-skipped
+CV_FOLDS="${CV_FOLDS:-0}"               # if >0, run k-fold CV (src.cv_train) instead of the single train+eval
 RUN_GMM="${RUN_GMM:-1}"                 # if 1, also run the GMM color baseline (independent of ResNet). smoke auto-skipped
 GMM_DATASET="${GMM_DATASET:-general}"   # gmm baseline dataset (general|T10|T20|Tam)
 GMM_COMPONENTS="${GMM_COMPONENTS:-2}"   # gmm baseline: Gaussian components per stage
@@ -63,8 +64,17 @@ python -m src.validate_data "${VD_ARGS[@]}"   # bash 5: an empty array expands t
 echo "[entrypoint] python -m src.split"
 python -m src.split
 
-# --- 3) train -------------------------------------------------------------
-if [ "$SKIP_TRAIN" = "1" ]; then
+# --- 3) train (single split) OR k-fold cross-validation -------------------
+if [ "$CV_FOLDS" -gt 0 ] 2>/dev/null; then
+  # k-fold CV: trains the model once per fold (group-aware, §2.1) and reports mean±std.
+  CV_ARGS=(--config "$CONFIG" --folds "$CV_FOLDS")
+  [ "$SMOKE" = "1" ] && CV_ARGS+=(--smoke-test)
+  [ -n "$EPOCHS" ] && CV_ARGS+=(--epochs "$EPOCHS")
+  [ -n "$VAL_FREQ" ] && CV_ARGS+=(--val-freq "$VAL_FREQ")
+  echo "[entrypoint] python -m src.cv_train ${CV_ARGS[*]}"
+  python -m src.cv_train "${CV_ARGS[@]}"
+  RUN_EVAL=0   # CV reports its own per-fold held-out metrics; there is no single best.pt to evaluate
+elif [ "$SKIP_TRAIN" = "1" ]; then
   echo "[entrypoint] SKIP_TRAIN=1 → skip training, evaluate only with existing best.pt"
 else
   TR_ARGS=(--config "$CONFIG")
