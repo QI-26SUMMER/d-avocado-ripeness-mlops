@@ -200,6 +200,22 @@ def scatter_lab(stats: np.ndarray, y: np.ndarray, path: Path) -> None:
     fig.tight_layout(); fig.savefig(path, dpi=130); plt.close(fig)
 
 
+def save_features_csv(tr, Str, te, Ste, path: Path) -> None:
+    """Write per-image color stats (the 'RGB points' + std/HSV/Lab) with metadata + split to CSV."""
+    import pandas as pd
+
+    meta_cols = ["File Name", "Storage Group", "Sample", "day", "view", "label", "Split"]
+
+    def frame(df, stats):
+        out = df[[c for c in meta_cols if c in df.columns]].copy()
+        for j, name in enumerate(STAT_NAMES):
+            out[name] = stats[:, j]
+        return out
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.concat([frame(tr, Str), frame(te, Ste)], ignore_index=True).to_csv(path, index=False)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="GMM color baseline (rgb vs rich) vs ResNet")
     ap.add_argument("--dataset", default="general", choices=list(DATASET_GROUPS))
@@ -229,6 +245,11 @@ def main() -> None:
                                ("exact_accuracy", "within_1_stage_accuracy", "stage_mae",
                                 "qwk", "macro_f1", "per_class_recall")} for n in results}},
               outdir / f"gmm_{args.dataset}_k{args.components}_compare.json")
+
+    # Per-image color features as CSV — the extracted 'RGB points' (+ std/HSV/Lab), with metadata
+    # and split, so the features can be re-plotted / re-analysed without re-running extraction.
+    save_features_csv(tr, Str, te, Ste, outdir / f"gmm_{args.dataset}_features.csv")
+
     scatter_rgb(Str, ytr, outdir / f"gmm_{args.dataset}_rgb_scatter.png")
     scatter_lab(Str, ytr, outdir / f"gmm_{args.dataset}_lab_scatter.png")
     print(f"[gmm] saved metrics (rgb + rich + compare) + scatters -> {outdir}")
