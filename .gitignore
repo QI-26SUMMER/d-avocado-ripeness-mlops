@@ -27,6 +27,9 @@ notebooks/
 # User's own test photos (personal, not committed)
 my_photos/
 
+# IDE / editor
+.idea/
+
 # OS / Office temp files
 .DS_Store
 Thumbs.db
