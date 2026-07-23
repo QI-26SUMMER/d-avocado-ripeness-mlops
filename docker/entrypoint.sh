@@ -20,6 +20,7 @@ SKIP_IMAGE_CHECK="${SKIP_IMAGE_CHECK:-0}"  # if 1, skip item 12 (full corrupted-
 SKIP_TRAIN="${SKIP_TRAIN:-0}"           # if 1, skip training (evaluate only with existing best.pt)
 RUN_EVAL="${RUN_EVAL:-1}"               # if 1, auto-evaluate the test set after training (evaluate.py). smoke auto-skipped
 CV_FOLDS="${CV_FOLDS:-0}"               # if >0, run k-fold CV (src.cv_train) instead of the single train+eval
+CV_RECOVER="${CV_RECOVER:-}"            # comma fold indices to recover from existing checkpoints (resume), e.g. 0,1
 RUN_GMM="${RUN_GMM:-1}"                 # if 1, also run the GMM color baseline (independent of ResNet). smoke auto-skipped
 GMM_DATASET="${GMM_DATASET:-general}"   # gmm baseline dataset (general|T10|T20|Tam)
 GMM_COMPONENTS="${GMM_COMPONENTS:-2}"   # gmm baseline: Gaussian components per stage
@@ -71,6 +72,7 @@ if [ "$CV_FOLDS" -gt 0 ] 2>/dev/null; then
   [ "$SMOKE" = "1" ] && CV_ARGS+=(--smoke-test)
   [ -n "$EPOCHS" ] && CV_ARGS+=(--epochs "$EPOCHS")
   [ -n "$VAL_FREQ" ] && CV_ARGS+=(--val-freq "$VAL_FREQ")
+  [ -n "$CV_RECOVER" ] && CV_ARGS+=(--recover-folds "$CV_RECOVER")
   echo "[entrypoint] python -m src.cv_train ${CV_ARGS[*]}"
   python -m src.cv_train "${CV_ARGS[@]}"
   RUN_EVAL=0   # CV reports its own per-fold held-out metrics; there is no single best.pt to evaluate

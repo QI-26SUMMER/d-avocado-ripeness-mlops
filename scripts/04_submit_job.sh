@@ -49,6 +49,7 @@ emit_env() { if [ -n "${2:-}" ]; then printf '        - name: %s\n          valu
   emit_env SKIP_TRAIN "${SKIP_TRAIN:-}"
   emit_env RUN_EVAL "${RUN_EVAL:-}"
   emit_env CV_FOLDS "${CV_FOLDS:-}"
+  emit_env CV_RECOVER "${CV_RECOVER:-}"
   emit_env RUN_GMM "${RUN_GMM:-}"
   emit_env GMM_DATASET "${GMM_DATASET:-}"
   emit_env GMM_COMPONENTS "${GMM_COMPONENTS:-}"
