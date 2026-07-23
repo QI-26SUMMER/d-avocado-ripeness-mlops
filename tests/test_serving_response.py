@@ -70,6 +70,20 @@ def test_alpha_from_temp_anchors_and_interpolation():
     assert round(alpha_from_temp(17), 2) == -2.24
 
 
+def test_alpha_from_temp_flat_above_20():
+    # Ripening rate plateaus above 20°C (separate paper's final-ripening-temp data),
+    # so alpha stops decreasing past the 20°C anchor instead of extrapolating further.
+    at_20 = alpha_from_temp(20)
+    assert alpha_from_temp(23) == at_20
+    assert alpha_from_temp(25) == at_20
+
+
+def test_alpha_from_temp_clamps_above_25():
+    # Accepted input range tops out at 25°C (TEMP_CLAMP); higher inputs are
+    # clamped rather than extrapolated, so they still land on the 20°C anchor.
+    assert alpha_from_temp(30) == alpha_from_temp(25)
+
+
 def test_response_has_backend_contract_keys():
     original = _set_stub_state()
     try:

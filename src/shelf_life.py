@@ -70,24 +70,34 @@ def estimate_days_to_target(predicted_stage, target_stage, alpha: float,
 # two controlled storage temperatures. The re-fit anchors show |α| going from
 # 4.003 (10°C) to 1.750 (20°C), ratio Q10 = 4.003/1.750 ≈ 2.287, i.e. ripening
 # rate roughly 2.29x per +10°C — the textbook produce-respiration behaviour.
-# So we interpolate ln|α| LINEARLY in temperature (log-linear / Arrhenius-like),
-# giving a smooth, physically-motivated curve that hits both anchors.
+# So we interpolate ln|α| LINEARLY in temperature (log-linear / Arrhenius-like)
+# between 10°C and 20°C, giving a smooth, physically-motivated curve that hits
+# both anchors.
 #
 # Q10 falls out of the two anchors below automatically — don't hard-code it
 # separately. If the anchors are ever re-fit again, change ONLY this tuple.
+#
+# Above 20°C the curve is flat, not extrapolated further: a separate paper's
+# final-ripening-temperature data (20/23/25°C -> ~4.8/4.6/4.7 days to ripen)
+# shows the ripening rate plateauing rather than continuing to accelerate past
+# 20°C. citation TODO: pin down title/DOI for this second paper.
+# Accepted input range is capped at 25°C (that same paper's data only goes up to
+# 25°C) - inputs above it are clamped, not extrapolated.
 _TEMP_ANCHORS = ((10.0, 4.003), (20.0, 1.750))   # (°C, |α|), re-fit anchors
-TEMP_CLAMP = (10.0, 30.0)   # stay within/just past the data; extrapolation is unvalidated
+TEMP_CLAMP = (10.0, 25.0)   # accepted input range; curve itself flattens above 20°C (see above)
 
 
 def alpha_from_temp(temp_celsius: float) -> float:
     """Log-linear (Q10≈2.287) map from temperature to α (negative,
     days-per-stage), matching ALPHA_5STAGE's sign convention.
 
-    Input is clamped to TEMP_CLAMP: outside the two anchor temps the curve is an
-    extrapolation the dataset does not back up, so we refuse to run away with it.
+    Interpolates between the 10°C/20°C anchors; flat (= 20°C's α) at or above
+    20°C (see module comment above). Input is clamped to TEMP_CLAMP first.
     """
     (t_lo, a_lo), (t_hi, a_hi) = _TEMP_ANCHORS
     t = min(max(float(temp_celsius), TEMP_CLAMP[0]), TEMP_CLAMP[1])
+    if t >= t_hi:
+        return -a_hi
     k = (math.log(a_hi) - math.log(a_lo)) / (t_hi - t_lo)   # d(ln|α|)/d°C
     magnitude = a_lo * math.exp(k * (t - t_lo))
     return -magnitude

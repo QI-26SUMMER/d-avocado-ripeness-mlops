@@ -220,7 +220,12 @@ The Spring backend (davocado-server) calls serving/app.py on Cloud Run. Full spe
 
   α source: temp_celsius → shelf_life.alpha_from_temp() only (no storage_group fallback in the serving
   contract — that path exists only in src/predict.py for the CLI). Q10 log-linear interpolation, finalised
-  anchors 10°C→|α|=4.003, 20°C→|α|=1.750 (Q10≈2.287).
+  anchors 10°C→|α|=4.003, 20°C→|α|=1.750 (Q10≈2.287), interpolated only between 10-20°C. Above 20°C the
+  curve is flat (= 20°C's α), not extrapolated further — a separate paper's final-ripening-temperature data
+  (20/23/25°C → ~4.8/4.6/4.7 days) shows the ripening rate plateauing past 20°C rather than accelerating
+  further. (Citation for that second paper still TBD — ask before citing it elsewhere.) Accepted input
+  range is capped at 25°C (TEMP_CLAMP) to match that paper's data range; inputs above are clamped, not
+  extrapolated.
 
   cropped_b64 (method A): when ENABLE_CROP=1 (live, 2026-07) the image is background-removal
   cropped (src/preprocess.py) before classification and the crop is returned as raw base64 JPEG;
