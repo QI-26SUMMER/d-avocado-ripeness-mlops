@@ -37,9 +37,9 @@ Response: {"predictions": [{"predicted_stage": 3, "label": "Ripe(1)", "hint": "R
   is given (absent -> field omitted -> backend stores null).
 
   cropped_b64 (method A): when ENABLE_CROP=1, the image is background-removal cropped
-  (src/preprocess.py, rembg by default) BEFORE classification, and the 224px crop is
-  returned as raw base64 JPEG. The backend saves it (cropped/{user_id}/{scan_id}.jpg)
-  and sets images.cropped_url. Absent when cropping is off (current CPU deploy) ->
+  (src/preprocess.py, InSPyReNet by default, ~20-22s/image on CPU) BEFORE classification, and
+  the 224px crop is returned as raw base64 JPEG. The backend saves it
+  (cropped/{user_id}/{scan_id}.jpg) and sets images.cropped_url. Absent when cropping is off ->
   backend leaves cropped_url null.
   Per-image failures return {"error": "..."} -> backend maps to NO_AVOCADO_DETECTED.
 
@@ -86,9 +86,11 @@ STORAGE_URI = os.environ.get("AIP_STORAGE_URI")
 LOCAL_MODEL_DIR = Path(os.environ.get("LOCAL_MODEL_DIR", "/tmp/model"))
 # Background-removal crop (src/preprocess.py). Off by default so the current CPU Cloud Run deploy
 # is unchanged; turn on with ENABLE_CROP=1 (also needs the preprocess deps in the image, see
-# requirements-preprocess.txt). SEGMENTER=rembg is CPU-friendly (current default); 'sam3' needs a GPU.
+# requirements-preprocess.txt). SEGMENTER=inspyrenet (default, ~20-22s/image CPU, best edge
+# quality of the CPU options compared) | 'rembg' (fast/light, ~1.6s/image) | 'sam3' (GPU only).
 ENABLE_CROP = os.environ.get("ENABLE_CROP", "0") == "1"
-SEGMENTER = os.environ.get("SEGMENTER", "rembg")   # rembg (CPU) | sam3 (GPU) — swap later
+SEGMENTER = os.environ.get("SEGMENTER", "inspyrenet")
+INSPYRENET_MODE = os.environ.get("INSPYRENET_MODE", "base")   # base (1024px, ~22s) | fast (384px, ~3s)
 SAM3_WEIGHTS = os.environ.get("SAM3_WEIGHTS", "sam3.pt")
 # img_size used only for the returned cropped_b64 preview; decoupled from any local model cfg
 # since the automl backend has no local checkpoint/cfg to read img_size from.
@@ -184,10 +186,16 @@ def _startup() -> None:
         raise ValueError(f"unknown MODEL_BACKEND {MODEL_BACKEND!r} (expected resnet|automl)")
 
     if ENABLE_CROP:
-        # lazy: pulls the segmenter's deps (rembg / ultralytics) only when cropping is on.
+        # lazy: pulls the segmenter's deps (transparent-background / rembg / ultralytics) only
+        # when cropping is on.
         from preprocess import load_segmenter
 
-        kw = {"weights": SAM3_WEIGHTS, "device": _state["device"]} if SEGMENTER == "sam3" else {}
+        if SEGMENTER == "sam3":
+            kw = {"weights": SAM3_WEIGHTS, "device": _state["device"]}
+        elif SEGMENTER == "inspyrenet":
+            kw = {"mode": INSPYRENET_MODE, "device": _state["device"]}
+        else:
+            kw = {}
         _state["segmenter"] = load_segmenter(SEGMENTER, **kw)
         print(f"[serving] crop ENABLED (segmenter={SEGMENTER!r}, device={_state['device']})")
 

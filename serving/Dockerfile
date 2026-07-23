@@ -13,11 +13,16 @@ WORKDIR /workspace
 COPY serving/requirements-serving.txt .
 RUN pip install -r requirements-serving.txt
 
-# Background-removal crop (ENABLE_CROP=1): rembg/u2net deps. Pre-download the u2net model at build
-# time so the first scan after a cold start doesn't pay the ~176 MB download (best-effort — falls
-# back to a runtime download if the fetch fails during the build).
+# Background-removal crop (ENABLE_CROP=1): InSPyReNet (default) + rembg/u2net (fallback) deps.
+# Pre-download both models at build time so the first scan after a cold start doesn't pay the
+# download (~370 MB InSPyReNet + ~176 MB u2net) on the request path (best-effort — falls back to
+# a runtime download if a fetch fails during the build). TRANSPARENT_BACKGROUND_FILE_PATH pins the
+# checkpoint cache dir so the build-time download location matches where the app looks at runtime.
+ENV TRANSPARENT_BACKGROUND_FILE_PATH=/workspace
 COPY requirements-preprocess.txt .
 RUN pip install -r requirements-preprocess.txt
+RUN python -c "from transparent_background import Remover; Remover(mode='base')" \
+    || echo "[build] InSPyReNet pre-download skipped — will fetch at runtime"
 RUN python -c "from rembg import new_session; new_session('u2net')" \
     || echo "[build] u2net pre-download skipped — will fetch at runtime"
 

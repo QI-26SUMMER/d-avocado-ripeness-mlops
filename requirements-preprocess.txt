@@ -1,11 +1,18 @@
 # Real-photo preprocessing (src/preprocess.py) — background removal at INFERENCE.
 # Install this into the serving/job image only when ENABLE_CROP=1 (keeps the default deploy lean).
 #
-# CURRENT default segmenter = rembg/u2net: CPU-friendly (~1.6 s/image), no gated weights,
-# downloads the ~176 MB u2net model on first use.
-rembg[cpu]                 # SEGMENTER=rembg (default). Pulls onnxruntime (CPU).
+# CURRENT DEFAULT segmenter = InSPyReNet (transparent-background package, mode='base'): best edge
+# quality of the CPU-viable options compared on real scans (see preprocess.py module docstring
+# for the comparison). ~370 MB checkpoint (downloaded on first use, or pre-baked at build time —
+# see serving/Dockerfile), ~20-22 s/image on CPU. Pulls torch/torchvision (already in the image
+# for the resnet classifier backend) plus kornia/albumentations/timm/opencv/gdown/pymatting.
+transparent-background      # SEGMENTER=inspyrenet (default)
 pillow
 numpy
+#
+# Fast/light alternative = rembg/u2net: ~176 MB, ~1.6 s/image, no gated weights. Was the default
+# before InSPyReNet; kept available as a low-latency fallback (SEGMENTER=rembg).
+rembg[cpu]
 #
 # FUTURE swap = SAM3 (SEGMENTER=sam3): precise, avocado-only concept segmentation, but heavy
 # (~3.5 GB) and GPU-only-practical. Uncomment when a GPU inference path is in place, and note

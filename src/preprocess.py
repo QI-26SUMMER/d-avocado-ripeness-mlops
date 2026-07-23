@@ -10,14 +10,21 @@ sees an in-distribution image. §3 forbids background-uniformity tricks (thresho
 — a learned segmenter does not rely on a clean background, so it is allowed.
 
 Segmenter is SWAPPABLE (this is the whole design). Anything with `.mask(pil) -> bool ndarray|None`
-plugs into the same geometry core. Two backends:
-  - RembgSegmenter (u2net)  ← CURRENT DEFAULT. Light (~176 MB), runs on CPU (~1.6 s/image),
-    no gated weights. Segments the most prominent foreground object — fine when the avocado is
-    the subject, but not avocado-specific.
+plugs into the same geometry core. Three backends:
+  - InSPyReNetSegmenter (transparent-background, mode='base') ← CURRENT DEFAULT (2026-07). Best
+    general edge quality of the CPU-viable options tested (u2net / isnet-general-use / birefnet-
+    general / InSPyReNet all compared on real scans) — chosen for overall mask quality, NOT
+    because it fixes any one specific case. ~370 MB checkpoint, ~20-22 s/image on CPU (mode=
+    'base', 1024px); 'fast' mode (384px) is ~3 s/image but was not what was chosen here. NOTE:
+    on a real scan set, u2net / isnet-general-use / birefnet-general / InSPyReNet ALL agreed on
+    including a linear skin discoloration on one test fruit — four independent architectures
+    agreeing means that mark is real fruit surface, not a segmentation error; do not expect a
+    future segmenter swap to remove genuine blemishes/marks that are actually on the avocado.
+  - RembgSegmenter (u2net)  ← fast/light alternative. ~176 MB, ~1.6 s/image, no gated weights.
+    Segments the most prominent foreground object — fine when the avocado is the subject, but
+    not avocado-specific. Was the default before InSPyReNet; kept as the low-latency fallback.
   - Sam3Segmenter (SAM3)    ← FUTURE SWAP. Concept prompt "avocado" (precise, avocado-only) but
-    heavy (~3.5 GB), GPU-only-practical, and its weights are gated on Hugging Face. Switch the
-    default to this once a GPU inference path + sam3.pt are in place — only load_segmenter()'s
-    default and the serving env need to change; nothing else does.
+    heavy (~3.5 GB), GPU-only-practical, and its weights are gated on Hugging Face.
 
 The geometry core (mask → bbox → crop → pad → resize) is pure PIL/NumPy and unit-testable
 without any segmenter. No avocado found → NoAvocadoDetected (serving turns this into the
@@ -25,7 +32,7 @@ backend's {"error": ...} → 422 NO_AVOCADO_DETECTED). This module does NOT deci
 
 Usage:
     from preprocess import load_segmenter, preprocess_real_photo
-    seg = load_segmenter("rembg")                # once (default); "sam3" to swap later
+    seg = load_segmenter("inspyrenet")            # once (default); "rembg"/"sam3" to swap
     img224 = preprocess_real_photo(pil_img, seg, img_size=224)   # PIL.Image, 224x224
     # then the SAME transform the model trained with: evaluation_transform(224)(img224)
 """
@@ -48,10 +55,30 @@ class NoAvocadoDetected(Exception):
 
 
 # ─── Segmenters (swappable; each exposes .mask(pil) -> bool ndarray | None) ──
+class InSPyReNetSegmenter:
+    """CURRENT DEFAULT. InSPyReNet salient-object segmentation (transparent-background package,
+    the paper's reference implementation). Best general edge quality of the options compared on
+    real scans (see module docstring). mode='base' (1024px) is the higher-quality, ~20-22 s/image
+    setting on CPU; mode='fast' (384px) trades quality for ~3 s/image. Downloads a ~370 MB
+    checkpoint on first use (cached under ~/.transparent-background, or
+    $TRANSPARENT_BACKGROUND_FILE_PATH/.transparent-background if that env is set)."""
+
+    def __init__(self, mode: str = "base", device: str | None = None):
+        from transparent_background import Remover
+
+        self._remover = Remover(mode=mode, device=device)
+
+    def mask(self, image) -> np.ndarray | None:
+        m = self._remover.process(_to_pil(image), type="map", threshold=0.5)
+        arr = np.asarray(m)[..., 0] > 127
+        return arr if arr.any() else None
+
+
 class RembgSegmenter:
-    """CURRENT DEFAULT. rembg salient-object segmentation (u2net). CPU-friendly, no gated
-    weights. Segments the most prominent foreground object (good when the avocado is the
-    subject). Downloads the u2net model on first use (~176 MB).
+    """Fast/light alternative (was the default before InSPyReNet). rembg salient-object
+    segmentation (u2net). CPU-friendly, no gated weights. Segments the most prominent foreground
+    object (good when the avocado is the subject). Downloads the u2net model on first use
+    (~176 MB).
 
     Caveat: it does NOT verify the object is an avocado, so it cannot reliably reject
     non-avocado images — a blank/uniform frame returns a bogus ~50% centred blob, not None.
@@ -94,19 +121,22 @@ class Sam3Segmenter:
         return max(masks, key=lambda m: int(m.sum())) if masks else None  # largest instance
 
 
-def load_segmenter(backend: str = "rembg", **kwargs):
+def load_segmenter(backend: str = "inspyrenet", **kwargs):
     """Factory for the swappable segmenter.
 
-    backend='rembg' (default, CPU, light) | 'sam3' (GPU, precise). ← SWAP the default to 'sam3'
-    here once a GPU inference path + sam3.pt exist; callers don't change.
-    kwargs pass through (rembg: model_name; sam3: weights, device, conf).
+    backend='inspyrenet' (default, CPU, best quality) | 'rembg' (CPU, fast/light) | 'sam3' (GPU,
+    avocado-concept precise). SWAP the default here (and nowhere else) to change what every
+    caller gets. kwargs pass through (inspyrenet: mode, device; rembg: model_name; sam3: weights,
+    device, conf).
     """
     backend = backend.lower()
+    if backend == "inspyrenet":
+        return InSPyReNetSegmenter(**kwargs)
     if backend == "rembg":
         return RembgSegmenter(**kwargs)
     if backend == "sam3":
         return Sam3Segmenter(**kwargs)
-    raise ValueError(f"unknown segmenter backend {backend!r} (expected 'rembg' or 'sam3')")
+    raise ValueError(f"unknown segmenter backend {backend!r} (expected 'inspyrenet'|'rembg'|'sam3')")
 
 
 def _extract_masks(results) -> list[np.ndarray]:
@@ -204,8 +234,9 @@ def _to_ndarray(image) -> np.ndarray:
 
 if __name__ == "__main__":
     # Eyeball the background removal on one real photo.
-    #   python -m src.preprocess --image my_photos/a.jpg --out out.jpg           # rembg (default)
-    #   python -m src.preprocess --image a.jpg --backend sam3 --weights sam3.pt  # SAM3 (needs GPU)
+    #   python -m src.preprocess --image my_photos/a.jpg --out out.jpg            # inspyrenet (default)
+    #   python -m src.preprocess --image a.jpg --backend rembg                    # fast/light
+    #   python -m src.preprocess --image a.jpg --backend sam3 --weights sam3.pt   # SAM3 (needs GPU)
     import argparse
 
     from PIL import Image
@@ -213,15 +244,21 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Background-removal preprocessing for one photo")
     ap.add_argument("--image", required=True)
     ap.add_argument("--out", default="preprocessed.jpg")
-    ap.add_argument("--backend", default="rembg", choices=["rembg", "sam3"])
+    ap.add_argument("--backend", default="inspyrenet", choices=["inspyrenet", "rembg", "sam3"])
+    ap.add_argument("--mode", default="base", help="inspyrenet backend: base (1024px) | fast (384px)")
     ap.add_argument("--weights", default="sam3.pt", help="sam3 backend: path to gated sam3.pt")
     ap.add_argument("--img-size", type=int, default=224)
-    ap.add_argument("--device", default=None, help="sam3 backend: cuda|cpu (auto if unset)")
+    ap.add_argument("--device", default=None, help="inspyrenet/sam3 backend: cuda|cpu (auto if unset)")
     ap.add_argument("--keep-background", action="store_true",
                     help="crop only, do NOT white out the background")
     args = ap.parse_args()
 
-    kw = {"weights": args.weights, "device": args.device} if args.backend == "sam3" else {}
+    if args.backend == "sam3":
+        kw = {"weights": args.weights, "device": args.device}
+    elif args.backend == "inspyrenet":
+        kw = {"mode": args.mode, "device": args.device}
+    else:
+        kw = {}
     seg = load_segmenter(args.backend, **kw)
     try:
         result = preprocess_real_photo(
