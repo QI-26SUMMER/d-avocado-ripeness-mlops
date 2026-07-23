@@ -1,8 +1,7 @@
 """Tests for the serving response shape after the backend field-name alignment.
 
-Covers only `_predict_one` in serving/app.py: verifies the response uses the
-Spring backend's DB column names (predicted_stage, stage_probs, model_version)
-instead of the old (stage, probs) names, and that days_left is left untouched.
+Covers `_predict_one` in serving/app.py (backend contract keys, days_to_target)
+and `alpha_from_temp` in src/shelf_life.py (Q10 log-linear interpolation).
 Uses a stubbed model + transform via the module-level `_state` dict, so no
 real checkpoint, GCS access, or Vertex AI plumbing is needed.
 
@@ -21,6 +20,7 @@ sys.path.insert(0, str(ROOT / "src"))  # serving/app.py itself expects src/ on s
 from PIL import Image  # noqa: E402
 
 from serving.app import _predict_one, _state  # noqa: E402
+from shelf_life import alpha_from_temp  # noqa: E402
 
 
 def _make_jpeg_bytes() -> bytes:
@@ -31,15 +31,20 @@ def _make_jpeg_bytes() -> bytes:
 
 
 class _StubModel:
-    """Ignores its input and always returns the same fixed logits (stage 3 wins)."""
+    """Ignores its input and always returns the same fixed logits (stage wins)."""
+
+    def __init__(self, stage: int = 3):
+        self.stage = stage
 
     def __call__(self, x):
         import torch
 
-        return torch.tensor([[0.0, 0.5, 4.0, 1.0, 0.0]])
+        logits = [0.0] * 5
+        logits[self.stage - 1] = 4.0
+        return torch.tensor([logits])
 
 
-def _set_stub_state(experiment_id: str = "TEST_experiment_v1") -> dict:
+def _set_stub_state(experiment_id: str = "TEST_experiment_v1", stage: int = 3) -> dict:
     """Monkeypatches the module-level _state with a stub model/transform.
 
     Returns the original _state contents so the caller can restore them.
@@ -47,7 +52,7 @@ def _set_stub_state(experiment_id: str = "TEST_experiment_v1") -> dict:
     import torch
 
     original = dict(_state)
-    _state["model"] = _StubModel()
+    _state["model"] = _StubModel(stage)
     _state["transform"] = lambda img: torch.zeros(3, 4, 4)
     _state["device"] = "cpu"
     _state["cfg"] = {"experiment_id": experiment_id}
@@ -59,10 +64,16 @@ def _restore_state(original: dict) -> None:
     _state.update(original)
 
 
+def test_alpha_from_temp_anchors_and_interpolation():
+    assert round(alpha_from_temp(10), 2) == -4.0
+    assert round(alpha_from_temp(20), 2) == -1.75
+    assert round(alpha_from_temp(17), 2) == -2.24
+
+
 def test_response_has_backend_contract_keys():
     original = _set_stub_state()
     try:
-        out = _predict_one(_make_jpeg_bytes(), storage_group=None)
+        out = _predict_one(_make_jpeg_bytes())
         assert set(out.keys()) == {
             "predicted_stage", "stage_probs", "confidence", "model_version", "label", "hint",
         }
@@ -73,7 +84,7 @@ def test_response_has_backend_contract_keys():
 def test_stage_probs_is_a_5way_distribution_matching_confidence():
     original = _set_stub_state()
     try:
-        out = _predict_one(_make_jpeg_bytes(), storage_group=None)
+        out = _predict_one(_make_jpeg_bytes())
         probs = out["stage_probs"]
         assert isinstance(probs, list) and len(probs) == 5
         assert all(isinstance(p, float) for p in probs)
@@ -86,20 +97,51 @@ def test_stage_probs_is_a_5way_distribution_matching_confidence():
 def test_model_version_matches_stubbed_cfg():
     original = _set_stub_state(experiment_id="P1_general_resnet18_paper_aug_oversample")
     try:
-        out = _predict_one(_make_jpeg_bytes(), storage_group=None)
+        out = _predict_one(_make_jpeg_bytes())
         assert out["model_version"] == "P1_general_resnet18_paper_aug_oversample"
     finally:
         _restore_state(original)
 
 
-def test_days_left_only_present_with_storage_group():
+def test_days_to_target_only_present_with_target_stage():
+    original = _set_stub_state(stage=2)
+    try:
+        out_no_target = _predict_one(_make_jpeg_bytes())
+        assert "days_to_target" not in out_no_target
+
+        out_with_target = _predict_one(_make_jpeg_bytes(), target_stage=4, temp_celsius=17.0)
+        assert "days_to_target" in out_with_target
+    finally:
+        _restore_state(original)
+
+
+def test_days_to_target_value_at_17c():
+    # predicted stage 2, target 4, alpha_from_temp(17) ~= -2.24 -> -2.24*(2-4) ~= 4.5
+    original = _set_stub_state(stage=2)
+    try:
+        out = _predict_one(_make_jpeg_bytes(), target_stage=4, temp_celsius=17.0)
+        assert out["days_to_target"] == 4.5
+        assert isinstance(out["days_to_target"], float)
+    finally:
+        _restore_state(original)
+
+
+def test_days_to_target_negative_when_overripe():
+    # predicted stage 5, target 4 -> already past target -> negative, not clipped to 0
+    original = _set_stub_state(stage=5)
+    try:
+        out = _predict_one(_make_jpeg_bytes(), target_stage=4, temp_celsius=17.0)
+        assert out["days_to_target"] < 0
+    finally:
+        _restore_state(original)
+
+
+def test_no_target_stage_does_not_crash():
     original = _set_stub_state()
     try:
-        out_no_group = _predict_one(_make_jpeg_bytes(), storage_group=None)
-        assert "days_left" not in out_no_group
-
-        out_with_group = _predict_one(_make_jpeg_bytes(), storage_group="T20")
-        assert "days_left" in out_with_group
+        out = _predict_one(_make_jpeg_bytes(), target_stage=None)
+        assert "days_to_target" not in out
+        assert "predicted_stage" in out
     finally:
         _restore_state(original)
 

@@ -13,32 +13,27 @@ Vertex AI sets these env vars at deploy time:
   AIP_HEALTH_ROUTE  health-check path
   AIP_PREDICT_ROUTE prediction path
 
-Request body (Vertex custom-container contract, {"instances": [...]}):
-  {"instances": [{"b64": "<base64-encoded jpg/png bytes>",
-                  "target_stage": 4,        # optional, per-image; enables days_to_target
-                  "temp_celsius": 21.0,      # optional, per-image; user's storage temp
-                  "storage_group": "T20"}],  # optional; discrete-α fallback if no temp
-   "parameters": {"target_stage": 4, "temp_celsius": 21.0}}  # optional shared defaults
-  A per-instance field overrides the same field in "parameters".
+Request body (Vertex custom-container contract, {"instances": [...]}), fixed to
+match the Spring backend exactly:
+  {"instances": [{"b64": "<base64-encoded jpg bytes>"}],
+   "parameters": {"target_stage": 4, "temp_celsius": 17.0}}
+  target_stage is an int 1-5, always sent by the backend. temp_celsius is a
+  float and may be absent, in which case it defaults to 20.0°C.
 
 Response: {"predictions": [{"predicted_stage": 3, "label": "Ripe(1)", "hint": "Ready to eat",
                              "confidence": 0.82, "stage_probs": [.., .., .., .., ..],
                              "model_version": "P1_general_resnet18_paper_aug_oversample",
-                             "days_to_target": 4.4,           # only if target_stage sent
-                             "estimated_peak_date": "2026-07-25",
-                             "days_left": 2.3}, ...]}          # only if storage_group sent
+                             "days_to_target": 4.4}, ...]}   # only if target_stage sent
   Field names match the Spring backend's DB columns (predicted_stage, stage_probs,
-  confidence, model_version, days_to_target, estimated_peak_date) so it can store the
-  response as-is. stage_probs is a LIST indexed 0..4 for stage 1..5 (not a dict).
+  confidence, model_version, days_to_target) so it can store the response as-is.
+  stage_probs is a LIST indexed 0..4 for stage 1..5 (not a dict). The backend
+  derives estimated_peak_date itself; this service does NOT return it.
 
-  days_to_target = days until the CURRENT stage reaches the user's target_stage,
-  = α × (predicted_stage − target_stage). Emitted only when target_stage is given
-  (absent -> field omitted -> backend stores null). Needs an α source: temp_celsius
-  (continuous, interpolated - see shelf_life.alpha_from_temp, ⚠ provisional) or
-  storage_group (discrete paper coefficients).
-
-  days_left is the SEPARATE paper-reproduction metric (days until stage 5); it is
-  NOT days_to_target and the two must never be conflated (different endpoints).
+  days_to_target = α × (predicted_stage − target_stage), NOT clipped at 0 (negative
+  means already past target, i.e. overripe), rounded to 1 decimal place (the DB
+  column is NUMERIC(4,1)). α comes from shelf_life.alpha_from_temp(temp_celsius)
+  (Q10 log-linear interpolation, see shelf_life.py). Emitted only when target_stage
+  is given (absent -> field omitted -> backend stores null).
   Per-image failures return {"error": "..."} -> backend maps to NO_AVOCADO_DETECTED.
 """
 from __future__ import annotations
@@ -46,7 +41,6 @@ from __future__ import annotations
 import base64
 import io
 import os
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import torch
@@ -60,21 +54,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from data import LABELS  # noqa: E402
 from models import build_model  # noqa: E402
-from shelf_life import (  # noqa: E402
-    ALPHA_5STAGE,
-    alpha_from_temp,
-    estimate_days_left,
-    estimate_days_to_target,
-)
+from shelf_life import alpha_from_temp, estimate_days_to_target  # noqa: E402
 from transforms import evaluation_transform  # noqa: E402
 
 STAGE_HINT = {1: "Unripe (firm)", 2: "Breaking", 3: "Ready to eat",
               4: "Peak (end of shelf life)", 5: "Overripe (too late)"}
-
-# estimated_peak_date is a calendar date the Korean end-user reads, so anchor it
-# to KST rather than the Cloud Run container's UTC clock (up to ~9h / one calendar
-# day off at midnight otherwise). Fixed offset avoids a tzdata dependency.
-KST = timezone(timedelta(hours=9))
 
 HEALTH_ROUTE = os.environ.get("AIP_HEALTH_ROUTE", "/health")
 PREDICT_ROUTE = os.environ.get("AIP_PREDICT_ROUTE", "/predict")
@@ -148,8 +132,7 @@ def health():
     return {"status": "ok", "experiment_id": _state["cfg"]["experiment_id"]}
 
 
-def _predict_one(image_bytes: bytes, storage_group: str | None,
-                 target_stage=None, temp_celsius=None) -> dict:
+def _predict_one(image_bytes: bytes, target_stage=None, temp_celsius: float = 20.0) -> dict:
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     x = _state["transform"](img).unsqueeze(0).to(_state["device"])
     with torch.no_grad():
@@ -163,57 +146,16 @@ def _predict_one(image_bytes: bytes, storage_group: str | None,
         "stage_probs": [float(probs[k - 1]) for k in range(1, 6)],
         "model_version": _state["cfg"]["experiment_id"],
     }
-    if storage_group:
-        if storage_group not in ALPHA_5STAGE:
-            out["shelf_life_error"] = f"unknown storage_group {storage_group!r} (expected T10|T20|Tam|Tamb)"
-        else:
-            # Days until stage 5 (this repo's paper-reproduction endpoint), NOT the
-            # backend's days_to_target. Kept for parity with src/predict.py; the
-            # backend ignores it. Do not rename this to days_to_target.
-            out["days_left"] = estimate_days_left(stage, storage_group)
-
     # days_to_target: days until the CURRENT stage reaches the user's target_stage.
-    # Only emitted when target_stage is explicitly given (agreed contract fallback:
-    # absent target_stage -> field omitted -> backend stores null).
+    # NOT clipped at 0 (negative = already past target, i.e. overripe — the app
+    # needs that), rounded to 1 decimal (DB column is NUMERIC(4,1)). Only emitted
+    # when target_stage is given (agreed contract: absent -> field omitted ->
+    # backend stores null). Do NOT invent a default target_stage.
     if target_stage is not None:
-        _add_days_to_target(out, stage, target_stage, temp_celsius, storage_group)
+        alpha = alpha_from_temp(temp_celsius)
+        days = estimate_days_to_target(stage, target_stage, alpha, clip_negative=False)
+        out["days_to_target"] = round(days, 1)
     return out
-
-
-def _add_days_to_target(out: dict, stage: int, target_stage,
-                        temp_celsius, storage_group: str | None) -> None:
-    """Fill out['days_to_target'] + ['estimated_peak_date'], or a *_error field.
-
-    α source, in order: temp_celsius (continuous, provisional interp) → storage_group
-    (discrete paper coefficients). estimated_peak_date = KST today + round(days).
-    """
-    try:
-        ts = int(target_stage)
-    except (TypeError, ValueError):
-        out["days_to_target_error"] = f"target_stage must be an int 1-5, got {target_stage!r}"
-        return
-    if not 1 <= ts <= 5:
-        out["days_to_target_error"] = f"target_stage out of range 1-5: {ts}"
-        return
-
-    if temp_celsius is not None:
-        try:
-            alpha = alpha_from_temp(float(temp_celsius))
-            basis = f"temp_interp(provisional):{float(temp_celsius):g}C"
-        except (TypeError, ValueError):
-            out["days_to_target_error"] = f"temp_celsius must be numeric, got {temp_celsius!r}"
-            return
-    elif storage_group and storage_group in ALPHA_5STAGE:
-        alpha = ALPHA_5STAGE[storage_group]
-        basis = f"storage:{storage_group}"
-    else:
-        out["days_to_target_error"] = "days_to_target needs temp_celsius or a valid storage_group"
-        return
-
-    days = estimate_days_to_target(stage, ts, alpha)
-    out["days_to_target"] = days
-    out["estimated_peak_date"] = (datetime.now(KST).date() + timedelta(days=round(days))).isoformat()
-    out["days_to_target_basis"] = basis  # debug only; backend ignores unknown fields
 
 
 @app.post(PREDICT_ROUTE)
@@ -221,19 +163,15 @@ async def predict(request: Request):
     body = await request.json()
     instances = body.get("instances", [])
     params = body.get("parameters") or {}
+    target_stage = params.get("target_stage")
+    temp_celsius = params.get("temp_celsius", 20.0)
 
     predictions = []
     for inst in instances:
         try:
             inst = inst if isinstance(inst, dict) else {"b64": inst}
             image_bytes = base64.b64decode(inst["b64"])
-            # Per-instance value wins over the shared `parameters` default, so a batch
-            # may carry per-image target_stage/temp while still allowing one global setting.
-            storage_group = inst.get("storage_group", params.get("storage_group"))
-            target_stage = inst.get("target_stage", params.get("target_stage"))
-            temp_celsius = inst.get("temp_celsius", params.get("temp_celsius"))
-            predictions.append(
-                _predict_one(image_bytes, storage_group, target_stage, temp_celsius))
+            predictions.append(_predict_one(image_bytes, target_stage, temp_celsius))
         except Exception as e:
             predictions.append({"error": str(e)})
     return {"predictions": predictions}
