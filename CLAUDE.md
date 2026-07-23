@@ -222,11 +222,29 @@ The Spring backend (davocado-server) calls serving/app.py on Cloud Run. Full spe
   contract — that path exists only in src/predict.py for the CLI). Q10 log-linear interpolation, finalised
   anchors 10°C→|α|=4.003, 20°C→|α|=1.750 (Q10≈2.287).
 
-  cropped_b64 (method A): when ENABLE_CROP=1 the image is background-removal cropped
-  (src/preprocess.py, rembg default) before classification and the crop is returned as raw base64 JPEG;
-  the backend saves it to cropped/{user_id}/{scan_id}.jpg and sets images.cropped_url. Off by default
-  (current CPU deploy) → field omitted → backend leaves cropped_url null. Enabling it needs the
-  preprocess deps in the image (requirements-preprocess.txt).
+  cropped_b64 (method A): when ENABLE_CROP=1 (live, 2026-07) the image is background-removal
+  cropped (src/preprocess.py) before classification and the crop is returned as raw base64 JPEG;
+  the backend saves it to cropped/{user_id}/{scan_id}.jpg and sets images.cropped_url.
+  SEGMENTER=inspyrenet (default) — InSPyReNet mode='base', chosen for edge quality over rembg/u2net
+  (see preprocess.py module docstring for the model comparison). ⚠️ SEGMENTER=rembg is the fast/
+  light fallback (~1-3s/image) if InSPyReNet's latency (below) ever needs to be dialed back.
+
+  MODEL_BACKEND=automl (live, 2026-07): /predict calls a teammate's cross-project Vertex AI AutoML
+  Endpoint (project qiautoml1) instead of the local ResNet — the local ResNet was collapsing to
+  stage-1/confidence≈1.0 on real phone photos (domain-gap failure). ResNet code/checkpoint kept,
+  not deleted; MODEL_BACKEND=resnet reverts with no code change. Needs cross-project IAM: the
+  Cloud Run service account must have roles/aiplatform.user on qiautoml1 (already granted).
+
+  ⚠️ Resource requirements are NOT in any repo file — they're deploy-time flags only. The service
+  MUST be deployed with --memory=8Gi --cpu=2 (not the Cloud Run default 4Gi/1cpu): InSPyReNet
+  mode='base' OOMs and crash-loops at 4Gi. Measured live latency (warm, --memory=8Gi --cpu=2):
+  ~52-56s/predict (2.5x the ~22s measured locally) — a known, deliberately accepted cost for crop
+  quality; do not "optimize" this away without checking with the team first. If a redeploy ever
+  drops back to 4Gi (e.g. a fresh `gcloud run deploy` on a brand-new service), it will crash-loop
+  identically to how avocado-serving-00006/00007 did — check memory first, don't re-debug from
+  scratch. requirements-preprocess.txt pins opencv-python-headless==4.10.0.84 — do NOT let it
+  float to latest (5.0.0.93 ships a broken wheel: pip reports success but site-packages/cv2/ has
+  no native module, so `import cv2` raises ModuleNotFoundError at container startup).
 
   The serving image has NO pandas — data.py / shelf_life.py keep pandas as a lazy/TYPE_CHECKING import.
   Don't add a top-level pandas import to anything the serving container imports.
