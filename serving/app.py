@@ -42,6 +42,18 @@ Response: {"predictions": [{"predicted_stage": 3, "label": "Ripe(1)", "hint": "R
   and sets images.cropped_url. Absent when cropping is off (current CPU deploy) ->
   backend leaves cropped_url null.
   Per-image failures return {"error": "..."} -> backend maps to NO_AVOCADO_DETECTED.
+
+Classifier backend (MODEL_BACKEND env, internal — does NOT change the wire contract above):
+  'resnet' (default) - the local torch checkpoint (existing behavior, unchanged).
+  'automl' - calls out to a teammate's Vertex AI AutoML Vision Endpoint (cross-project) instead
+    of running local inference. Swapped in 2026-07 because the local ResNet (P1) was observed
+    collapsing to stage-1/confidence~1.0 on real phone photos (domain-gap failure vs the light-
+    box training data). The ResNet checkpoint/code is kept, NOT deleted — MODEL_BACKEND=resnet
+    switches back to it with no code change. Needs AUTOML_PROJECT/AUTOML_LOCATION/
+    AUTOML_ENDPOINT_ID, and the deploy service account must be granted roles/aiplatform.user on
+    the teammate's project (cross-project IAM; no key file — Cloud Run uses its attached SA via
+    ADC). The AutoML model's displayNames are expected to be the literal strings "1".."5"
+    (validated at request time; a mismatch fails loudly rather than silently mismapping stages).
 """
 from __future__ import annotations
 
@@ -78,9 +90,20 @@ LOCAL_MODEL_DIR = Path(os.environ.get("LOCAL_MODEL_DIR", "/tmp/model"))
 ENABLE_CROP = os.environ.get("ENABLE_CROP", "0") == "1"
 SEGMENTER = os.environ.get("SEGMENTER", "rembg")   # rembg (CPU) | sam3 (GPU) — swap later
 SAM3_WEIGHTS = os.environ.get("SAM3_WEIGHTS", "sam3.pt")
+# img_size used only for the returned cropped_b64 preview; decoupled from any local model cfg
+# since the automl backend has no local checkpoint/cfg to read img_size from.
+CROP_IMG_SIZE = int(os.environ.get("CROP_IMG_SIZE", "224"))
+
+# Classifier backend. Default 'resnet' is the safe/explicit choice: forgetting to set this env
+# on a redeploy must NOT silently start calling out to another team's GCP project.
+MODEL_BACKEND = os.environ.get("MODEL_BACKEND", "resnet")   # resnet | automl
+AUTOML_PROJECT = os.environ.get("AUTOML_PROJECT")
+AUTOML_LOCATION = os.environ.get("AUTOML_LOCATION", "us-central1")
+AUTOML_ENDPOINT_ID = os.environ.get("AUTOML_ENDPOINT_ID")
 
 app = FastAPI()
-_state: dict = {"model": None, "transform": None, "device": "cpu", "cfg": None, "segmenter": None}
+_state: dict = {"model": None, "transform": None, "device": "cpu", "cfg": None, "segmenter": None,
+                "automl_client": None, "automl_endpoint_path": None}
 
 
 def _download_artifacts(gcs_uri: str, dest: Path) -> None:
@@ -133,9 +156,33 @@ def load_model() -> None:
     _state["cfg"] = cfg
 
 
+def load_automl_client() -> None:
+    """Build the Vertex AI PredictionServiceClient + resource path for the teammate's
+    cross-project AutoML Endpoint. No key file: Cloud Run authenticates as its attached service
+    account via ADC, which must be granted roles/aiplatform.user on AUTOML_PROJECT."""
+    from google.cloud import aiplatform
+
+    if not AUTOML_PROJECT or not AUTOML_ENDPOINT_ID:
+        raise RuntimeError("MODEL_BACKEND=automl requires AUTOML_PROJECT and AUTOML_ENDPOINT_ID")
+    client = aiplatform.gapic.PredictionServiceClient(
+        client_options={"api_endpoint": f"{AUTOML_LOCATION}-aiplatform.googleapis.com"})
+    path = client.endpoint_path(project=AUTOML_PROJECT, location=AUTOML_LOCATION,
+                                endpoint=AUTOML_ENDPOINT_ID)
+    _state["automl_client"] = client
+    _state["automl_endpoint_path"] = path
+
+
 @app.on_event("startup")
 def _startup() -> None:
-    load_model()
+    if MODEL_BACKEND == "resnet":
+        load_model()
+    elif MODEL_BACKEND == "automl":
+        load_automl_client()
+        print(f"[serving] backend=automl project={AUTOML_PROJECT} location={AUTOML_LOCATION} "
+              f"endpoint={AUTOML_ENDPOINT_ID}")
+    else:
+        raise ValueError(f"unknown MODEL_BACKEND {MODEL_BACKEND!r} (expected resnet|automl)")
+
     if ENABLE_CROP:
         # lazy: pulls the segmenter's deps (rembg / ultralytics) only when cropping is on.
         from preprocess import load_segmenter
@@ -147,9 +194,13 @@ def _startup() -> None:
 
 @app.get(HEALTH_ROUTE)
 def health():
+    if MODEL_BACKEND == "automl":
+        if _state["automl_client"] is None:
+            return JSONResponse({"status": "not ready"}, status_code=503)
+        return {"status": "ok", "backend": "automl", "endpoint": AUTOML_ENDPOINT_ID}
     if _state["model"] is None:
         return JSONResponse({"status": "not ready"}, status_code=503)
-    return {"status": "ok", "experiment_id": _state["cfg"]["experiment_id"]}
+    return {"status": "ok", "backend": "resnet", "experiment_id": _state["cfg"]["experiment_id"]}
 
 
 def _encode_jpeg_b64(pil_img) -> str:
@@ -158,6 +209,60 @@ def _encode_jpeg_b64(pil_img) -> str:
     buf = io.BytesIO()
     pil_img.save(buf, format="JPEG", quality=90)
     return base64.b64encode(buf.getvalue()).decode()
+
+
+def _classify_resnet(img) -> tuple[int, list[float]]:
+    x = _state["transform"](img).unsqueeze(0).to(_state["device"])
+    with torch.no_grad():
+        probs = torch.softmax(_state["model"](x), 1)[0].cpu().numpy()
+    stage = int(probs.argmax()) + 1
+    return stage, [float(probs[k - 1]) for k in range(1, 6)]
+
+
+def _classify_automl(img) -> tuple[int, list[float]]:
+    """Call the teammate's cross-project AutoML Vision Endpoint. Builds the standard AutoML
+    image-classification request (base64 JPEG content, confidence_threshold=0 + max_predictions=5
+    so all 5 stages come back), then maps displayName -> stage index explicitly (AutoML does NOT
+    guarantee the returned order matches stage order) rather than trusting positional order.
+
+    response.predictions[0] is a proto-plus MapComposite (a google.protobuf.Value struct that
+    proto-plus auto-unwraps into a dict-like object) -- it supports .get()/indexing directly, no
+    json_format/ClassificationPredictionResult parsing needed (verified against the installed
+    google-cloud-aiplatform; going through ._pb + MessageToDict throws on this field type)."""
+    from google.cloud.aiplatform.gapic.schema import predict as automl_schema
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=92)
+    content_b64 = base64.b64encode(buf.getvalue()).decode()
+
+    instance = automl_schema.instance.ImageClassificationPredictionInstance(
+        content=content_b64).to_value()
+    parameters = automl_schema.params.ImageClassificationPredictionParams(
+        confidence_threshold=0.0, max_predictions=5).to_value()
+
+    response = _state["automl_client"].predict(
+        endpoint=_state["automl_endpoint_path"], instances=[instance], parameters=parameters)
+    if not response.predictions:
+        raise RuntimeError("AutoML endpoint returned no predictions")
+    result = response.predictions[0]
+    names = result.get("displayNames") or []
+    confs = result.get("confidences") or []
+    if not names or len(names) != len(confs):
+        raise RuntimeError(f"AutoML response missing displayNames/confidences: {dict(result)!r}")
+
+    probs = [0.0] * 5
+    for name, conf in zip(names, confs):
+        try:
+            idx = int(name) - 1
+        except (TypeError, ValueError) as e:
+            raise RuntimeError(
+                f"AutoML displayName {name!r} is not an int 1-5 -- label schema mismatch, "
+                "refusing to guess a mapping") from e
+        if not 0 <= idx <= 4:
+            raise RuntimeError(f"AutoML displayName {name!r} out of range 1-5")
+        probs[idx] = float(conf)
+    stage = probs.index(max(probs)) + 1
+    return stage, probs
 
 
 def _predict_one(image_bytes: bytes, target_stage=None, temp_celsius: float = 20.0) -> dict:
@@ -170,19 +275,24 @@ def _predict_one(image_bytes: bytes, target_stage=None, temp_celsius: float = 20
         # per-image try/except -> {"error": ...} -> backend NO_AVOCADO_DETECTED.
         from preprocess import preprocess_real_photo
 
-        img = preprocess_real_photo(img, seg, img_size=_state["cfg"].get("img_size", 224))
+        img_size = _state["cfg"].get("img_size", CROP_IMG_SIZE) if _state["cfg"] else CROP_IMG_SIZE
+        img = preprocess_real_photo(img, seg, img_size=img_size)
         cropped_b64 = _encode_jpeg_b64(img)
-    x = _state["transform"](img).unsqueeze(0).to(_state["device"])
-    with torch.no_grad():
-        probs = torch.softmax(_state["model"](x), 1)[0].cpu().numpy()
-    stage = int(probs.argmax()) + 1
+
+    if MODEL_BACKEND == "automl":
+        stage, probs = _classify_automl(img)
+        model_version = f"automl:{AUTOML_PROJECT}:{AUTOML_ENDPOINT_ID}"
+    else:
+        stage, probs = _classify_resnet(img)
+        model_version = _state["cfg"]["experiment_id"]
+
     out = {
         "predicted_stage": stage,
         "label": LABELS[stage],
         "hint": STAGE_HINT[stage],
-        "confidence": float(probs[stage - 1]),
-        "stage_probs": [float(probs[k - 1]) for k in range(1, 6)],
-        "model_version": _state["cfg"]["experiment_id"],
+        "confidence": probs[stage - 1],
+        "stage_probs": probs,
+        "model_version": model_version,
     }
     if cropped_b64 is not None:
         out["cropped_b64"] = cropped_b64  # method A: backend saves -> cropped_url
