@@ -210,14 +210,17 @@ The Spring backend (davocado-server) calls serving/app.py on Cloud Run. Full spe
 
   Response fields are snake_case and match the backend's DB columns: predicted_stage (int 1-5, required),
   model_version (str, required), confidence, stage_probs (a LIST of 5 floats indexed 0..4 — never a dict),
-  days_to_target (float), estimated_peak_date ("YYYY-MM-DD"). Per-image reject = {"error": "..."}.
+  days_to_target (float). Per-image reject = {"error": "..."}. The service does NOT return
+  estimated_peak_date — the backend derives that itself from days_to_target.
 
-  days_to_target = α × (predicted_stage − target_stage), clipped at 0. Emitted only when the request sends
-  target_stage (else omitted → backend stores null). This is NOT days_left (paper's days-until-stage-5) —
-  never rename one to the other; the endpoints differ (§1: peak = stage 4, not 5).
+  days_to_target = α × (predicted_stage − target_stage), rounded to 1 decimal, NOT clipped at 0 (negative
+  = overripe, the app needs that). Emitted only when the request sends target_stage (else omitted →
+  backend stores null). This is NOT days_left (paper's days-until-stage-5) — never rename one to the
+  other; the endpoints differ (§1: peak = stage 4, not 5).
 
-  α source: temp_celsius → shelf_life.alpha_from_temp() (⚠ PROVISIONAL log-linear/Q10 interpolation, the
-  temp→α mapping is still being decided) or storage_group → discrete paper coefficients.
+  α source: temp_celsius → shelf_life.alpha_from_temp() only (no storage_group fallback in the serving
+  contract — that path exists only in src/predict.py for the CLI). Q10 log-linear interpolation, finalised
+  anchors 10°C→|α|=4.003, 20°C→|α|=1.750 (Q10≈2.287).
 
   The serving image has NO pandas — data.py / shelf_life.py keep pandas as a lazy/TYPE_CHECKING import.
   Don't add a top-level pandas import to anything the serving container imports.

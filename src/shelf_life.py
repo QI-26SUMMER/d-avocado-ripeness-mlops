@@ -65,22 +65,22 @@ def estimate_days_to_target(predicted_stage, target_stage, alpha: float,
     return max(d, 0.0) if clip_negative else d
 
 
-# ─── Continuous temperature → α  (⚠ PROVISIONAL — CLAUDE.md §4 open item) ──
+# ─── Continuous temperature → α  (finalised — CLAUDE.md §8) ───────────────
 # The user provides a continuous temp_celsius but the paper only fits α at the
-# two controlled storage temperatures. Those anchors show |α| almost exactly
-# HALVING from 10°C→20°C (4.390 → 2.116, ratio 2.07), i.e. ripening rate roughly
-# doubles per +10°C — a Q10≈2, which is the textbook produce-respiration behaviour.
+# two controlled storage temperatures. The re-fit anchors show |α| going from
+# 4.003 (10°C) to 1.750 (20°C), ratio Q10 = 4.003/1.750 ≈ 2.287, i.e. ripening
+# rate roughly 2.29x per +10°C — the textbook produce-respiration behaviour.
 # So we interpolate ln|α| LINEARLY in temperature (log-linear / Arrhenius-like),
 # giving a smooth, physically-motivated curve that hits both anchors.
 #
-# This is the interim choice while the mapping is still being decided. When it is
-# finalised, change ONLY this function — nothing else depends on how α is derived.
-_TEMP_ANCHORS = ((10.0, 4.390), (20.0, 2.116))   # (°C, |α|), paper Table 4
+# Q10 falls out of the two anchors below automatically — don't hard-code it
+# separately. If the anchors are ever re-fit again, change ONLY this tuple.
+_TEMP_ANCHORS = ((10.0, 4.003), (20.0, 1.750))   # (°C, |α|), re-fit anchors
 TEMP_CLAMP = (10.0, 30.0)   # stay within/just past the data; extrapolation is unvalidated
 
 
 def alpha_from_temp(temp_celsius: float) -> float:
-    """PROVISIONAL log-linear (Q10≈2) map from temperature to α (negative,
+    """Log-linear (Q10≈2.287) map from temperature to α (negative,
     days-per-stage), matching ALPHA_5STAGE's sign convention.
 
     Input is clamped to TEMP_CLAMP: outside the two anchor temps the curve is an

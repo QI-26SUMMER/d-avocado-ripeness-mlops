@@ -69,16 +69,20 @@ def evaluate_val(model, loader, device, crit) -> tuple[float, float, dict]:
 
 
 def train(cfg: dict, smoke: bool = False,
-          epochs_override: int | None = None, val_freq_override: int | None = None) -> dict:
+          epochs_override: int | None = None, val_freq_override: int | None = None,
+          train_df=None, val_df=None, exp_id: str | None = None) -> dict:
     set_seed(cfg.get("seed", 42), deterministic=cfg.get("deterministic", True))
     device = get_device()
-    exp_id = cfg["experiment_id"]
+    exp_id = exp_id or cfg["experiment_id"]
     ckpt_dir = OUTPUT_DIR / "checkpoints" / exp_id
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-    merged = load_metadata_and_splits()
-    train_df = subset_frame(merged, cfg["dataset"], "train")
-    val_df = subset_frame(merged, cfg["dataset"], "val")
+    # Single-split default: read the fixed train/val from splits.csv. K-fold CV (src/cv_train.py)
+    # passes its own per-fold frames + exp_id instead.
+    if train_df is None or val_df is None:
+        merged = load_metadata_and_splits()
+        train_df = subset_frame(merged, cfg["dataset"], "train")
+        val_df = subset_frame(merged, cfg["dataset"], "val")
 
     img_size = cfg.get("img_size", 224)
     num_workers = 0 if smoke else cfg.get("num_workers", 4)
@@ -124,6 +128,7 @@ def train(cfg: dict, smoke: bool = False,
           f"val imgs={len(val_df)} batch={cfg['batch_size']} lr={cfg['lr']} epochs={epochs}")
 
     history, best = [], {"val_acc": -1.0, "val_loss": float("inf"), "iter": -1, "epoch": -1}
+    best_metrics = None  # full metric bundle at the best checkpoint (for CV aggregation / reporting)
     checks_no_improve, git_hash = 0, git_commit_hash()
     g_iter, stop = 0, False
     t0 = time.time()
@@ -137,12 +142,13 @@ def train(cfg: dict, smoke: bool = False,
             opt.step()
             g_iter += 1
             if g_iter % val_freq == 0:
-                va, vl, _ = evaluate_val(model, val_loader, device, crit)
+                va, vl, m = evaluate_val(model, val_loader, device, crit)
                 history.append({"iter": g_iter, "epoch": epoch, "train_loss": float(loss.item()),
                                 "val_acc": va, "val_loss": vl, "lr": opt.param_groups[0]["lr"]})
                 improved = (va > best["val_acc"]) or (va == best["val_acc"] and vl < best["val_loss"])
                 if improved:
                     best = {"val_acc": va, "val_loss": vl, "iter": g_iter, "epoch": epoch}
+                    best_metrics = m
                     torch.save({"model": model.state_dict(), "cfg": cfg, "best": best},
                                ckpt_dir / "best.pt")
                     checks_no_improve = 0
@@ -167,7 +173,7 @@ def train(cfg: dict, smoke: bool = False,
         "device": device, "pretrained": cfg.get("pretrained", True),
         "optimizer": cfg.get("optimizer", {"name": "sgd", "momentum": 0.9, "weight_decay": 1e-4}),
         "scheduler": {"type": "StepLR", "step": cfg.get("lr_step", 10), "gamma": cfg.get("lr_gamma", 0.1)},
-        "epochs_run": epoch, "best": best, "history": history,
+        "epochs_run": epoch, "best": best, "best_metrics": best_metrics, "history": history,
         "checkpoint": str(ckpt_dir / "best.pt"),
         "note_impl_choices": "optimizer/momentum/weight_decay/split_seed are not published in the paper (implementation choice)",
         "smoke_test": smoke,
