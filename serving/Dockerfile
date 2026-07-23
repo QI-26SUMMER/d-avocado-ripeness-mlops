@@ -21,6 +21,11 @@ RUN pip install -r requirements-serving.txt
 ENV TRANSPARENT_BACKGROUND_FILE_PATH=/workspace
 COPY requirements-preprocess.txt .
 RUN pip install -r requirements-preprocess.txt
+# transparent-background pulls the GUI build of opencv-python, which needs X11 libs
+# (libxcb.so.1 etc.) that python:3.12-slim doesn't have -> `import cv2` crashes the container at
+# startup (confirmed via a failed Cloud Run deploy). Swap in opencv-python-headless: same cv2 API
+# for our usage (resize/blur/color-convert, no GUI calls), no system libs needed.
+RUN pip uninstall -y opencv-python && pip install --no-cache-dir opencv-python-headless
 RUN python -c "from transparent_background import Remover; Remover(mode='base')" \
     || echo "[build] InSPyReNet pre-download skipped — will fetch at runtime"
 RUN python -c "from rembg import new_session; new_session('u2net')" \
