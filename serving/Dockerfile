@@ -25,7 +25,12 @@ RUN pip install -r requirements-preprocess.txt
 # (libxcb.so.1 etc.) that python:3.12-slim doesn't have -> `import cv2` crashes the container at
 # startup (confirmed via a failed Cloud Run deploy). Swap in opencv-python-headless: same cv2 API
 # for our usage (resize/blur/color-convert, no GUI calls), no system libs needed.
-RUN pip uninstall -y opencv-python && pip install --no-cache-dir opencv-python-headless
+# PINNED to 4.10.0.84, NOT latest: opencv-python-headless 5.0.0.93 (latest as of this writing) has
+# a broken wheel -- pip reports it installed but site-packages/cv2/ ends up with no native module,
+# so `import cv2` raises ModuleNotFoundError (reproduced identically in two separate environments;
+# --force-reinstall --no-deps confirmed it isn't a stale-cache issue). 4.10.0.84 installs cleanly.
+RUN pip uninstall -y opencv-python && \
+    pip install --no-cache-dir --force-reinstall --no-deps "opencv-python-headless==4.10.0.84"
 RUN python -c "from transparent_background import Remover; Remover(mode='base')" \
     || echo "[build] InSPyReNet pre-download skipped — will fetch at runtime"
 RUN python -c "from rembg import new_session; new_session('u2net')" \
