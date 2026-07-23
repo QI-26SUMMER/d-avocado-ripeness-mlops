@@ -23,7 +23,8 @@ match the Spring backend exactly:
 Response: {"predictions": [{"predicted_stage": 3, "label": "Ripe(1)", "hint": "Ready to eat",
                              "confidence": 0.82, "stage_probs": [.., .., .., .., ..],
                              "model_version": "P1_general_resnet18_paper_aug_oversample",
-                             "days_to_target": 4.4}, ...]}   # only if target_stage sent
+                             "days_to_target": 4.4,           # only if target_stage sent
+                             "cropped_b64": "<base64 jpg>"}, ...]}  # only if ENABLE_CROP=1
   Field names match the Spring backend's DB columns (predicted_stage, stage_probs,
   confidence, model_version, days_to_target) so it can store the response as-is.
   stage_probs is a LIST indexed 0..4 for stage 1..5 (not a dict). The backend
@@ -34,6 +35,12 @@ Response: {"predictions": [{"predicted_stage": 3, "label": "Ripe(1)", "hint": "R
   column is NUMERIC(4,1)). α comes from shelf_life.alpha_from_temp(temp_celsius)
   (Q10 log-linear interpolation, see shelf_life.py). Emitted only when target_stage
   is given (absent -> field omitted -> backend stores null).
+
+  cropped_b64 (method A): when ENABLE_CROP=1, the image is background-removal cropped
+  (src/preprocess.py, rembg by default) BEFORE classification, and the 224px crop is
+  returned as raw base64 JPEG. The backend saves it (cropped/{user_id}/{scan_id}.jpg)
+  and sets images.cropped_url. Absent when cropping is off (current CPU deploy) ->
+  backend leaves cropped_url null.
   Per-image failures return {"error": "..."} -> backend maps to NO_AVOCADO_DETECTED.
 """
 from __future__ import annotations
@@ -65,9 +72,15 @@ PREDICT_ROUTE = os.environ.get("AIP_PREDICT_ROUTE", "/predict")
 HTTP_PORT = int(os.environ.get("AIP_HTTP_PORT", "8080"))
 STORAGE_URI = os.environ.get("AIP_STORAGE_URI")
 LOCAL_MODEL_DIR = Path(os.environ.get("LOCAL_MODEL_DIR", "/tmp/model"))
+# Background-removal crop (src/preprocess.py). Off by default so the current CPU Cloud Run deploy
+# is unchanged; turn on with ENABLE_CROP=1 (also needs the preprocess deps in the image, see
+# requirements-preprocess.txt). SEGMENTER=rembg is CPU-friendly (current default); 'sam3' needs a GPU.
+ENABLE_CROP = os.environ.get("ENABLE_CROP", "0") == "1"
+SEGMENTER = os.environ.get("SEGMENTER", "rembg")   # rembg (CPU) | sam3 (GPU) — swap later
+SAM3_WEIGHTS = os.environ.get("SAM3_WEIGHTS", "sam3.pt")
 
 app = FastAPI()
-_state: dict = {"model": None, "transform": None, "device": "cpu", "cfg": None}
+_state: dict = {"model": None, "transform": None, "device": "cpu", "cfg": None, "segmenter": None}
 
 
 def _download_artifacts(gcs_uri: str, dest: Path) -> None:
@@ -123,6 +136,13 @@ def load_model() -> None:
 @app.on_event("startup")
 def _startup() -> None:
     load_model()
+    if ENABLE_CROP:
+        # lazy: pulls the segmenter's deps (rembg / ultralytics) only when cropping is on.
+        from preprocess import load_segmenter
+
+        kw = {"weights": SAM3_WEIGHTS, "device": _state["device"]} if SEGMENTER == "sam3" else {}
+        _state["segmenter"] = load_segmenter(SEGMENTER, **kw)
+        print(f"[serving] crop ENABLED (segmenter={SEGMENTER!r}, device={_state['device']})")
 
 
 @app.get(HEALTH_ROUTE)
@@ -132,8 +152,26 @@ def health():
     return {"status": "ok", "experiment_id": _state["cfg"]["experiment_id"]}
 
 
+def _encode_jpeg_b64(pil_img) -> str:
+    """base64-encoded JPEG bytes of the crop (method A: backend decodes and saves it, then
+    sets images.cropped_url). Raw base64, no data: prefix."""
+    buf = io.BytesIO()
+    pil_img.save(buf, format="JPEG", quality=90)
+    return base64.b64encode(buf.getvalue()).decode()
+
+
 def _predict_one(image_bytes: bytes, target_stage=None, temp_celsius: float = 20.0) -> dict:
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    cropped_b64 = None
+    seg = _state.get("segmenter")
+    if seg is not None:
+        # Background-removal crop (§3 domain gap). Classify the CROP, not the raw photo, and hand
+        # the crop back to the backend. A NoAvocadoDetected raise propagates to predict()'s
+        # per-image try/except -> {"error": ...} -> backend NO_AVOCADO_DETECTED.
+        from preprocess import preprocess_real_photo
+
+        img = preprocess_real_photo(img, seg, img_size=_state["cfg"].get("img_size", 224))
+        cropped_b64 = _encode_jpeg_b64(img)
     x = _state["transform"](img).unsqueeze(0).to(_state["device"])
     with torch.no_grad():
         probs = torch.softmax(_state["model"](x), 1)[0].cpu().numpy()
@@ -146,6 +184,8 @@ def _predict_one(image_bytes: bytes, target_stage=None, temp_celsius: float = 20
         "stage_probs": [float(probs[k - 1]) for k in range(1, 6)],
         "model_version": _state["cfg"]["experiment_id"],
     }
+    if cropped_b64 is not None:
+        out["cropped_b64"] = cropped_b64  # method A: backend saves -> cropped_url
     # days_to_target: days until the CURRENT stage reaches the user's target_stage.
     # NOT clipped at 0 (negative = already past target, i.e. overripe — the app
     # needs that), rounded to 1 decimal (DB column is NUMERIC(4,1)). Only emitted

@@ -222,5 +222,11 @@ The Spring backend (davocado-server) calls serving/app.py on Cloud Run. Full spe
   contract — that path exists only in src/predict.py for the CLI). Q10 log-linear interpolation, finalised
   anchors 10°C→|α|=4.003, 20°C→|α|=1.750 (Q10≈2.287).
 
+  cropped_b64 (method A): when ENABLE_CROP=1 the image is background-removal cropped
+  (src/preprocess.py, rembg default) before classification and the crop is returned as raw base64 JPEG;
+  the backend saves it to cropped/{user_id}/{scan_id}.jpg and sets images.cropped_url. Off by default
+  (current CPU deploy) → field omitted → backend leaves cropped_url null. Enabling it needs the
+  preprocess deps in the image (requirements-preprocess.txt).
+
   The serving image has NO pandas — data.py / shelf_life.py keep pandas as a lazy/TYPE_CHECKING import.
   Don't add a top-level pandas import to anything the serving container imports.

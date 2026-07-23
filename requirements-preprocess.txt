@@ -1,0 +1,14 @@
+# Real-photo preprocessing (src/preprocess.py) — background removal at INFERENCE.
+# Install this into the serving/job image only when ENABLE_CROP=1 (keeps the default deploy lean).
+#
+# CURRENT default segmenter = rembg/u2net: CPU-friendly (~1.6 s/image), no gated weights,
+# downloads the ~176 MB u2net model on first use.
+rembg[cpu]                 # SEGMENTER=rembg (default). Pulls onnxruntime (CPU).
+pillow
+numpy
+#
+# FUTURE swap = SAM3 (SEGMENTER=sam3): precise, avocado-only concept segmentation, but heavy
+# (~3.5 GB) and GPU-only-practical. Uncomment when a GPU inference path is in place, and note
+# the sam3.pt weights are gated — request access on the Hugging Face "SAM 3" page and download
+# them manually (they do NOT auto-download); pass the path via SAM3_WEIGHTS.
+# ultralytics>=8.3.0        # needs a version with SAM 3 support (SAM3SemanticPredictor)
