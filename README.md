@@ -70,6 +70,17 @@ experiment_id: `P1_general_resnet18_...` through `P8_tamb_alexnet_...`.
 Deployed to production: **P1 (general × ResNet-18)**, though `MODEL_BACKEND=automl` currently
 routes live traffic to a teammate's AutoML model instead (see Serving below).
 
+## Model comparison (ResNet vs AutoML vs GMM)
+Full write-up — per-model architecture, training configs, per-class charts, and open evaluation gaps:
+**[`MODEL_SUMMARY.md`](MODEL_SUMMARY.md)** (charts regenerate via `scripts/make_model_summary_charts.py`).
+
+Headline: **ResNet-18** 5-fold CV **79.4% exact / 99.5% within-1 / QWK 0.946**; **AutoML Balanced** AP 0.908
+(precision 84.3% / recall 79.9%); **GMM-rich** color baseline 65.0% exact. The four tracks share only
+precision/recall, and their protocols differ (5-fold CV vs single split vs threshold-based AutoML), so read
+the cross-track bars as **directional, not final** (see MODEL_SUMMARY §1).
+
+![Precision and recall across ResNet-18, AutoML Raw, AutoML Balanced, and the GMM color baseline](assets/model-summary/cross_model_precision_recall.png)
+
 ## GMM color baseline (classical ML comparison)
 `src/gmm_baseline.py` — a non-deep-learning comparison point: each image → mean color stats of the avocado
 (non-white) pixels (`"rgb"` = 3-D mean RGB, `"rich"` = +std/HSV/Lab, 12-D); one `GaussianMixture` per ripeness
