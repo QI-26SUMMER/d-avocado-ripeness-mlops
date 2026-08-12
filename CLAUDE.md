@@ -166,14 +166,33 @@ repo/
 ├── Dockerfile                            # training image
 ├── serving/                              # FastAPI prediction container (Cloud Run) — app.py, Dockerfile
 ├── notebooks/
-└── src/
-    ├── data.py         # loader, drops 12 missing images, filter_to_manifest, group split
-    ├── validate_data.py# integrity checks → metadata_clean.csv (applies the manifest)
-    ├── split.py        # 70/15/15 sample-level split → splits.csv
-    ├── dataset.py      # torch Dataset/DataLoader (single-image input only, §2.3)
-    ├── models.py  ├── train.py  ├── evaluate.py  ├── predict.py
-    └── shelf_life.py   # days_left (paper) + days_to_target (serving D-day), temp→α
+└── src/                                  # split by pipeline stage (2026-08)
+    ├── common/         # shared by every stage. MUST NOT import from the three below.
+    │   ├── labels.py       # LABELS, NUM_CLASSES (domain constants, no dependencies)
+    │   ├── utils.py        # seeding, config, OUTPUT_DIR, git hash
+    │   ├── metrics.py      # ordinal metric bundle (acc, MAE, within-1, QWK)
+    │   ├── models.py       # ResNet-18 / AlexNet
+    │   ├── transforms.py   # train/eval image transforms
+    │   └── shelf_life.py   # days_left (paper) + days_to_target (serving D-day), temp→α
+    ├── data/          # python -m src.data.validate_data ; python -m src.data.split
+    │   ├── data.py         # loader, drops 12 missing images, filter_to_manifest, group split
+    │   ├── validate_data.py# integrity checks → metadata_clean.csv (applies the manifest)
+    │   ├── split.py        # 70/15/15 sample-level split → splits.csv
+    │   └── dataset.py      # torch Dataset/DataLoader (single-image input only, §2.3)
+    ├── training/      # python -m src.training.train ; .evaluate ; .cv_train ; .gmm_baseline
+    │   ├── train.py  ├── cv_train.py  ├── evaluate.py
+    │   ├── sampler.py      # paper-style oversampling (train split only)
+    │   └── gmm_baseline.py # classical-ML colour baseline
+    └── inference/     # python -m src.inference.predict
+        ├── preprocess.py   # real-photo background-removal crop + load_rgb (EXIF, §8)
+        └── predict.py      # CLI: checkpoint → stage + probabilities
 
+Import rule: data/, training/ and inference/ import from common/, never the reverse — that is
+why the label constants live in common/labels.py instead of data/data.py. Every module keeps the
+try-relative/except-absolute shim, because tests and serving/app.py put src/ on sys.path (where
+`..common` would escape the top-level package) while entrypoint.sh runs `python -m src.<pkg>.<mod>`.
+serving/Dockerfile copies only common/{labels,models,transforms,shelf_life}.py and
+inference/preprocess.py — one COPY per directory, since a multi-source COPY flattens the tree.
 
 Do not commit images to git (471 MB). Provide a script that downloads them via DOI instead.
 Fix the seed. A result that isn't reproducible isn't a result.
@@ -219,7 +238,7 @@ The Spring backend (davocado-server) calls serving/app.py on Cloud Run. Full spe
   other; the endpoints differ (§1: peak = stage 4, not 5).
 
   α source: temp_celsius → shelf_life.alpha_from_temp() only (no storage_group fallback in the serving
-  contract — that path exists only in src/predict.py for the CLI). Q10 log-linear interpolation, finalised
+  contract — that path exists only in src/inference/predict.py for the CLI). Q10 log-linear interpolation, finalised
   anchors 10°C→|α|=4.003, 20°C→|α|=1.750 (Q10≈2.287), interpolated only between 10-20°C. Above 20°C the
   curve is flat (= 20°C's α), not extrapolated further — a separate paper's final-ripening-temperature data
   (20/23/25°C → ~4.8/4.6/4.7 days) shows the ripening rate plateauing past 20°C rather than accelerating
@@ -228,7 +247,7 @@ The Spring backend (davocado-server) calls serving/app.py on Cloud Run. Full spe
   extrapolated.
 
   cropped_b64 (method A): when ENABLE_CROP=1 (live, 2026-07) the image is background-removal
-  cropped (src/preprocess.py) before classification and the crop is returned as raw base64 JPEG;
+  cropped (src/inference/preprocess.py) before classification and the crop is returned as raw base64 JPEG;
   the backend saves it to cropped/{user_id}/{scan_id}.jpg and sets images.cropped_url.
   SEGMENTER=inspyrenet (default) — InSPyReNet mode='base', chosen for edge quality over rembg/u2net
   (see preprocess.py module docstring for the model comparison). ⚠️ SEGMENTER=rembg is the fast/

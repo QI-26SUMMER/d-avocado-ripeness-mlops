@@ -23,7 +23,10 @@ env/
 # Large / unnecessary (not needed in the container)
 notebooks/
 docs/
-my_photos/
+# Personal test photos and anything derived from them, plus segmentation debug dumps.
+# Kept in step with .gitignore — my_photos_fixed/ and my_photos_cropped*/ are just as useless here.
+my_photos*/
+diag/
 
 # Dataset images: not in the repo, but excluded defensively (keep the xlsx - do not exclude all of data/)
 data/Hass Avocado Ripening Photographic Dataset/

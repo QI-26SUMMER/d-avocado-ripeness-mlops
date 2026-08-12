@@ -36,7 +36,7 @@ def main():
     print(f"{len(configs)} experiments: {[c.stem for c in configs]}")
 
     for c in configs:
-        cmd = [sys.executable, "-m", "src.train", "--config", str(c)]
+        cmd = [sys.executable, "-m", "src.training.train", "--config", str(c)]
         if args.smoke:
             cmd.append("--smoke-test")
         else:
@@ -47,7 +47,7 @@ def main():
         subprocess.run(cmd, cwd=ROOT, check=True)
 
     print("\n=== Evaluate all ===")
-    subprocess.run([sys.executable, "-m", "src.evaluate", "--all"], cwd=ROOT, check=True)
+    subprocess.run([sys.executable, "-m", "src.training.evaluate", "--all"], cwd=ROOT, check=True)
 
 
 if __name__ == "__main__":

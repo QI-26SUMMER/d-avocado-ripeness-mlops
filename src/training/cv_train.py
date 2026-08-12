@@ -17,8 +17,8 @@ original run's exactly.
 CV runs over ALL samples of the chosen dataset (the fixed train/val/test Split column is ignored).
 
 Run:
-  python -m src.cv_train --config configs/paper/general_resnet18.yaml --folds 5
-  python -m src.cv_train --config ... --folds 5 --recover-folds 0,1   # resume: reuse folds 0,1
+  python -m src.training.cv_train --config configs/paper/general_resnet18.yaml --folds 5
+  python -m src.training.cv_train --config ... --folds 5 --recover-folds 0,1   # resume: reuse folds 0,1
 """
 from __future__ import annotations
 
@@ -28,19 +28,19 @@ import json
 import numpy as np
 
 try:
-    from .dataset import DATASET_GROUPS, load_metadata_and_splits, make_loader
-    from .metrics import image_level_metrics  # noqa: F401  (kept for parity/imports)
+    from ..common.metrics import image_level_metrics  # noqa: F401  (kept for parity/imports)
+    from ..common.models import build_model
+    from ..common.transforms import evaluation_transform
+    from ..common.utils import OUTPUT_DIR, get_device, load_config, save_json, set_seed
+    from ..data.dataset import DATASET_GROUPS, load_metadata_and_splits, make_loader
     from .train import evaluate_val, train
-    from .transforms import evaluation_transform
-    from .models import build_model
-    from .utils import OUTPUT_DIR, get_device, load_config, save_json, set_seed
-except ImportError:
-    from dataset import DATASET_GROUPS, load_metadata_and_splits, make_loader
-    from metrics import image_level_metrics  # noqa: F401
-    from train import evaluate_val, train
-    from transforms import evaluation_transform
-    from models import build_model
-    from utils import OUTPUT_DIR, get_device, load_config, save_json, set_seed
+except ImportError:  # src/ on sys.path (tests, serving): `..` would escape the top-level package
+    from common.metrics import image_level_metrics  # noqa: F401
+    from common.models import build_model
+    from common.transforms import evaluation_transform
+    from common.utils import OUTPUT_DIR, get_device, load_config, save_json, set_seed
+    from data.dataset import DATASET_GROUPS, load_metadata_and_splits, make_loader
+    from training.train import evaluate_val, train
 
 AGG_KEYS = ["exact_accuracy", "within_1_stage_accuracy", "stage_mae", "qwk", "macro_f1"]
 

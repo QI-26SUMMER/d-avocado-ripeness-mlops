@@ -19,7 +19,7 @@ VAL_FREQ="${VAL_FREQ:-}"                 # validation frequency override
 SKIP_IMAGE_CHECK="${SKIP_IMAGE_CHECK:-0}"  # if 1, skip item 12 (full corrupted-image scan)
 SKIP_TRAIN="${SKIP_TRAIN:-0}"           # if 1, skip training (evaluate only with existing best.pt)
 RUN_EVAL="${RUN_EVAL:-1}"               # if 1, auto-evaluate the test set after training (evaluate.py). smoke auto-skipped
-CV_FOLDS="${CV_FOLDS:-0}"               # if >0, run k-fold CV (src.cv_train) instead of the single train+eval
+CV_FOLDS="${CV_FOLDS:-0}"               # if >0, run k-fold CV (src.training.cv_train) instead of the single train+eval
 CV_RECOVER="${CV_RECOVER:-}"            # comma fold indices to recover from existing checkpoints (resume), e.g. 0,1
 RUN_GMM="${RUN_GMM:-1}"                 # if 1, also run the GMM color baseline (independent of ResNet). smoke auto-skipped
 GMM_DATASET="${GMM_DATASET:-general}"   # gmm baseline dataset (general|T10|T20|Tam)
@@ -60,10 +60,10 @@ fi
 
 VD_ARGS=()
 [ "$SKIP_IMAGE_CHECK" = "1" ] && VD_ARGS+=(--skip-image-check)
-echo "[entrypoint] python -m src.validate_data ${VD_ARGS[*]-}"
-python -m src.validate_data "${VD_ARGS[@]}"   # bash 5: an empty array expands to 0 arguments
-echo "[entrypoint] python -m src.split"
-python -m src.split
+echo "[entrypoint] python -m src.data.validate_data ${VD_ARGS[*]-}"
+python -m src.data.validate_data "${VD_ARGS[@]}"   # bash 5: an empty array expands to 0 arguments
+echo "[entrypoint] python -m src.data.split"
+python -m src.data.split
 
 # --- 3) train (single split) OR k-fold cross-validation -------------------
 if [ "$CV_FOLDS" -gt 0 ] 2>/dev/null; then
@@ -73,8 +73,8 @@ if [ "$CV_FOLDS" -gt 0 ] 2>/dev/null; then
   [ -n "$EPOCHS" ] && CV_ARGS+=(--epochs "$EPOCHS")
   [ -n "$VAL_FREQ" ] && CV_ARGS+=(--val-freq "$VAL_FREQ")
   [ -n "$CV_RECOVER" ] && CV_ARGS+=(--recover-folds "$CV_RECOVER")
-  echo "[entrypoint] python -m src.cv_train ${CV_ARGS[*]}"
-  python -m src.cv_train "${CV_ARGS[@]}"
+  echo "[entrypoint] python -m src.training.cv_train ${CV_ARGS[*]}"
+  python -m src.training.cv_train "${CV_ARGS[@]}"
   RUN_EVAL=0   # CV reports its own per-fold held-out metrics; there is no single best.pt to evaluate
 elif [ "$SKIP_TRAIN" = "1" ]; then
   echo "[entrypoint] SKIP_TRAIN=1 → skip training, evaluate only with existing best.pt"
@@ -83,16 +83,16 @@ else
   [ "$SMOKE" = "1" ] && TR_ARGS+=(--smoke-test)
   [ -n "$EPOCHS" ] && TR_ARGS+=(--epochs "$EPOCHS")
   [ -n "$VAL_FREQ" ] && TR_ARGS+=(--val-freq "$VAL_FREQ")
-  echo "[entrypoint] python -m src.train ${TR_ARGS[*]}"
-  python -m src.train "${TR_ARGS[@]}"
+  echo "[entrypoint] python -m src.training.train ${TR_ARGS[*]}"
+  python -m src.training.train "${TR_ARGS[@]}"
 fi
 
 # --- 4) evaluate (test-set model analysis: confusion matrix, QWK, per-class, best/two-side, shelf-life) ----
 # Unlike AutoML, Custom Training does not provide analysis automatically, so generate it here via evaluate.py.
 # smoke is skipped because its checkpoint is meaningless.
 if [ "$RUN_EVAL" = "1" ] && [ "$SMOKE" != "1" ]; then
-  echo "[entrypoint] python -m src.evaluate --config $CONFIG"
-  python -m src.evaluate --config "$CONFIG"
+  echo "[entrypoint] python -m src.training.evaluate --config $CONFIG"
+  python -m src.training.evaluate --config "$CONFIG"
 else
   echo "[entrypoint] skip evaluate (RUN_EVAL=$RUN_EVAL SMOKE=$SMOKE)"
 fi
@@ -101,8 +101,8 @@ fi
 # Needs only metadata_clean + splits + images (all present by now), not best.pt. Non-fatal:
 # a baseline hiccup must not fail a job whose training/eval already succeeded. Skipped on smoke.
 if [ "$RUN_GMM" = "1" ] && [ "$SMOKE" != "1" ]; then
-  echo "[entrypoint] python -m src.gmm_baseline --dataset $GMM_DATASET --components $GMM_COMPONENTS"
-  python -m src.gmm_baseline --dataset "$GMM_DATASET" --components "$GMM_COMPONENTS" \
+  echo "[entrypoint] python -m src.training.gmm_baseline --dataset $GMM_DATASET --components $GMM_COMPONENTS"
+  python -m src.training.gmm_baseline --dataset "$GMM_DATASET" --components "$GMM_COMPONENTS" \
     || echo "[entrypoint] WARNING: gmm baseline failed (non-fatal; training/eval result stands)"
 else
   echo "[entrypoint] skip gmm baseline (RUN_GMM=$RUN_GMM SMOKE=$SMOKE)"

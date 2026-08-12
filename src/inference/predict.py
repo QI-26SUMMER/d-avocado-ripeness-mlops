@@ -1,10 +1,10 @@
 """Inference on real user photos (deployment scenario).
 
 Usage:
-  python -m src.predict --image path/to/photo.jpg
-  python -m src.predict --dir  path/to/folder
-  python -m src.predict --image photo.jpg --checkpoint P3_t10_resnet18_paper_aug_oversample
-  python -m src.predict --image photo.jpg --storage-group T20   # also computes shelf-life
+  python -m src.inference.predict --image path/to/photo.jpg
+  python -m src.inference.predict --dir  path/to/folder
+  python -m src.inference.predict --image photo.jpg --checkpoint P3_t10_resnet18_paper_aug_oversample
+  python -m src.inference.predict --image photo.jpg --storage-group T20   # also computes shelf-life
 
 Default model = P1 general ResNet-18 (for generalization when storage condition is
 unknown). Input is a single RGB image only (§2.3).
@@ -23,19 +23,19 @@ import numpy as np
 import torch
 
 try:
-    from .data import LABELS
-    from .models import build_model
+    from ..common.labels import LABELS
+    from ..common.models import build_model
+    from ..common.shelf_life import ALPHA_5STAGE, estimate_days_left
+    from ..common.transforms import evaluation_transform
+    from ..common.utils import OUTPUT_DIR, get_device
     from .preprocess import load_rgb
-    from .shelf_life import ALPHA_5STAGE, estimate_days_left
-    from .transforms import evaluation_transform
-    from .utils import OUTPUT_DIR, get_device
-except ImportError:
-    from data import LABELS
-    from models import build_model
-    from preprocess import load_rgb
-    from shelf_life import ALPHA_5STAGE, estimate_days_left
-    from transforms import evaluation_transform
-    from utils import OUTPUT_DIR, get_device
+except ImportError:  # src/ on sys.path (tests, serving): `..` would escape the top-level package
+    from common.labels import LABELS
+    from common.models import build_model
+    from common.shelf_life import ALPHA_5STAGE, estimate_days_left
+    from common.transforms import evaluation_transform
+    from common.utils import OUTPUT_DIR, get_device
+    from inference.preprocess import load_rgb
 
 DEFAULT_ID = "P1_general_resnet18_paper_aug_oversample"
 EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}

@@ -52,7 +52,7 @@ def git_commit_hash() -> str:
     """Current commit hash (§11 experiment logging). Returns 'unknown' on failure."""
     try:
         return subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parents[1],
+            ["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parents[2],
             stderr=subprocess.DEVNULL,
         ).decode().strip()
     except Exception:
@@ -71,8 +71,8 @@ def get_device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
-# Project paths
-REPO_ROOT = Path(__file__).resolve().parents[1]
+# Project paths. parents[2] because this file is src/common/utils.py — two levels below the root.
+REPO_ROOT = Path(__file__).resolve().parents[2]
 # Default is local outputs. When running on GCP (Vertex), point AVOCADO_OUTPUT_DIR at the
 # GCS mount (/gcs/...) so checkpoints/history are persisted durably (no effect on local runs).
 OUTPUT_DIR = Path(os.environ.get("AVOCADO_OUTPUT_DIR", str(REPO_ROOT / "outputs" / "paper_reproduction")))

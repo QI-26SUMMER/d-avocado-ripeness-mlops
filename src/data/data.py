@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 # pandas is used at runtime only inside load_metadata (imported lazily there). Everywhere else it
-# appears only in type hints (strings under `from __future__ import annotations`), so importing this
-# module for its LABELS constant — as the serving container does — must not require pandas.
+# appears only in type hints (strings under `from __future__ import annotations`), so this module
+# stays importable without pandas.
 if TYPE_CHECKING:
     import pandas as pd
 
@@ -26,8 +26,9 @@ if TYPE_CHECKING:
 # These are LOCAL paths (mirrors utils.OUTPUT_DIR's env-override style). On GCP the training
 # entrypoint downloads the dataset from GCS to local SSD first and points the env vars below at
 # it, so by the time this module reads anything the paths are always local. Defined without
-# importing utils on purpose: the serving Dockerfile copies data.py but NOT utils.py.
-REPO_ROOT = Path(__file__).resolve().parents[1]
+# importing utils on purpose, to keep this module dependency-free.
+# parents[2] because this file is src/data/data.py — two levels below the repo root.
+REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.environ.get("AVOCADO_DATA_DIR", str(REPO_ROOT / "data")))
 META_XLSX = DATA_DIR / "Avocado Ripening Dataset.xlsx"
 
@@ -52,9 +53,8 @@ IMAGE_DIR = Path(
 # locally it defaults to the repo's data/ copy. Absent -> no exclusion (full dataset).
 MANIFEST_CSV = Path(os.environ.get("AVOCADO_MANIFEST", str(DATA_DIR / "avocado_complete_states.csv")))
 
-# Label definitions (CLAUDE.md §1). 4=peak (end of shelf life), 5=past peak. Service window=3-4.
-LABELS = {1: "Unripe", 2: "Breaking", 3: "Ripe(1)", 4: "Ripe(2)/peak", 5: "Overripe"}
-NUM_CLASSES = 5
+# Label definitions moved to common/labels.py (LABELS, NUM_CLASSES): they are domain constants
+# needed by models/ and serving too, and keeping them here made common/ depend on this package.
 
 FILENAME_RE = re.compile(r"^(T\w+)_d(\d+)_(\d+)_([ab])_(\d+)$")
 

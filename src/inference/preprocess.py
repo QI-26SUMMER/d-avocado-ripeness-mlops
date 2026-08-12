@@ -39,7 +39,7 @@ without any segmenter. No avocado found → NoAvocadoDetected (serving turns thi
 backend's {"error": ...} → 422 NO_AVOCADO_DETECTED). This module does NOT decide where it runs.
 
 Usage:
-    from preprocess import load_segmenter, preprocess_real_photo
+    from inference.preprocess import load_segmenter, preprocess_real_photo
     seg = load_segmenter("inspyrenet")            # once (default); "rembg"/"sam3" to swap
     img224 = preprocess_real_photo(pil_img, seg, img_size=224)   # PIL.Image, 224x224
     # then the SAME transform the model trained with: evaluation_transform(224)(img224)
@@ -293,9 +293,9 @@ def _to_ndarray(image) -> np.ndarray:
 
 if __name__ == "__main__":
     # Eyeball the background removal on one real photo.
-    #   python -m src.preprocess --image my_photos/a.jpg --out out.jpg            # inspyrenet (default)
-    #   python -m src.preprocess --image a.jpg --backend rembg                    # fast/light
-    #   python -m src.preprocess --image a.jpg --backend sam3 --weights sam3.pt   # SAM3 (needs GPU)
+    #   python -m src.inference.preprocess --image my_photos/a.jpg --out out.jpg            # inspyrenet (default)
+    #   python -m src.inference.preprocess --image a.jpg --backend rembg                    # fast/light
+    #   python -m src.inference.preprocess --image a.jpg --backend sam3 --weights sam3.pt   # SAM3 (needs GPU)
     import argparse
 
     ap = argparse.ArgumentParser(description="Background-removal preprocessing for one photo")

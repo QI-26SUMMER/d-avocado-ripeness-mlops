@@ -36,8 +36,16 @@ RUN python -c "from transparent_background import Remover; Remover(mode='base')"
 RUN python -c "from rembg import new_session; new_session('u2net')" \
     || echo "[build] u2net pre-download skipped — will fetch at runtime"
 
-# Only the modules the server actually imports (model def, transforms, labels, shelf-life, crop).
-COPY src/__init__.py src/data.py src/models.py src/transforms.py src/shelf_life.py src/preprocess.py src/
+# Only the modules the server actually imports (labels, model def, transforms, shelf-life, crop).
+# One COPY per package directory, NOT one flat COPY: with multiple sources Docker copies each file
+# in by basename and flattens the tree, which would put common/labels.py at src/labels.py and break
+# `from common.labels import ...`.
+# src/data/ is deliberately absent — the serving image needed it only for LABELS, which now lives
+# in common/labels.py, so pandas-adjacent dataset code no longer ships to production.
+COPY src/__init__.py src/
+COPY src/common/__init__.py src/common/labels.py src/common/models.py \
+     src/common/transforms.py src/common/shelf_life.py src/common/
+COPY src/inference/__init__.py src/inference/preprocess.py src/inference/
 COPY serving/app.py serving/app.py
 
 EXPOSE 8080

@@ -1,6 +1,6 @@
 """Data integrity checks (paper reproduction §2) + metadata_clean.csv generation.
 
-Run: python -m src.validate_data
+Run: python -m src.data.validate_data
 Runs 12 checks and saves the results to outputs/paper_reproduction/reports/data_validation.json,
 then generates outputs/paper_reproduction/splits/metadata_clean.csv using only rows whose image
 file actually exists on disk.
@@ -16,11 +16,11 @@ from pathlib import Path
 import pandas as pd
 
 try:
+    from ..common.utils import OUTPUT_DIR, save_json
     from .data import IMAGE_DIR, filter_to_manifest, load_metadata
-    from .utils import OUTPUT_DIR, save_json
-except ImportError:
-    from data import IMAGE_DIR, filter_to_manifest, load_metadata
-    from utils import OUTPUT_DIR, save_json
+except ImportError:  # src/ on sys.path (tests, serving): `..` would escape the top-level package
+    from common.utils import OUTPUT_DIR, save_json
+    from data.data import IMAGE_DIR, filter_to_manifest, load_metadata
 
 
 def run_checks(image_check: bool = True) -> tuple[pd.DataFrame, dict]:

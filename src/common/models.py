@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import torch.nn as nn
 
-try:  # supports both package import and script execution
-    from .data import NUM_CLASSES
+try:  # relative when imported as src.common.models; absolute when src/ is on sys.path
+    from .labels import NUM_CLASSES
 except ImportError:
-    from data import NUM_CLASSES
+    from common.labels import NUM_CLASSES
 
 
 def resnet18_baseline(num_classes: int = NUM_CLASSES, pretrained: bool = True) -> nn.Module:

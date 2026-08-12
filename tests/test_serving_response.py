@@ -1,7 +1,7 @@
 """Tests for the serving response shape after the backend field-name alignment.
 
 Covers `_predict_one` in serving/app.py (backend contract keys, days_to_target)
-and `alpha_from_temp` in src/shelf_life.py (Q10 log-linear interpolation).
+and `alpha_from_temp` in src/common/shelf_life.py (Q10 log-linear interpolation).
 Uses a stubbed model + transform via the module-level `_state` dict, so no
 real checkpoint, GCS access, or Vertex AI plumbing is needed.
 
@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT / "src"))  # serving/app.py itself expects src/ on s
 from PIL import Image  # noqa: E402
 
 from serving.app import _predict_one, _state  # noqa: E402
-from shelf_life import alpha_from_temp  # noqa: E402
+from common.shelf_life import alpha_from_temp  # noqa: E402
 
 
 def _make_jpeg_bytes() -> bytes:
