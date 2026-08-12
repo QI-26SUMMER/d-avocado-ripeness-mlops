@@ -24,8 +24,12 @@ data/Hass Avocado Ripening Photographic Dataset/
 docs/
 notebooks/
 
-# User's own test photos (personal, not committed)
-my_photos/
+# User's own test photos (personal, not committed) and anything derived from them:
+# my_photos_fixed/ (EXIF-rotated), my_photos_cropped*/ (preprocess.py output).
+my_photos*/
+
+# Ad-hoc segmentation debug dumps (as-loaded image + mask per photo)
+diag/
 
 # IDE / editor
 .idea/

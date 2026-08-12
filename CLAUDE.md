@@ -241,15 +241,40 @@ The Spring backend (davocado-server) calls serving/app.py on Cloud Run. Full spe
   Cloud Run service account must have roles/aiplatform.user on qiautoml1 (already granted).
 
   ⚠️ Resource requirements are NOT in any repo file — they're deploy-time flags only. The service
-  MUST be deployed with --memory=8Gi --cpu=2 (not the Cloud Run default 4Gi/1cpu): InSPyReNet
-  mode='base' OOMs and crash-loops at 4Gi. Measured live latency (warm, --memory=8Gi --cpu=2):
-  ~52-56s/predict (2.5x the ~22s measured locally) — a known, deliberately accepted cost for crop
-  quality; do not "optimize" this away without checking with the team first. If a redeploy ever
-  drops back to 4Gi (e.g. a fresh `gcloud run deploy` on a brand-new service), it will crash-loop
-  identically to how avocado-serving-00006/00007 did — check memory first, don't re-debug from
-  scratch. requirements-preprocess.txt pins opencv-python-headless==4.10.0.84 — do NOT let it
-  float to latest (5.0.0.93 ships a broken wheel: pip reports success but site-packages/cv2/ has
-  no native module, so `import cv2` raises ModuleNotFoundError at container startup).
+  MUST be deployed with at least --memory=8Gi (not the Cloud Run default 4Gi): InSPyReNet
+  mode='base' OOMs and crash-loops at 4Gi. --cpu=2 was the original floor for the same reason;
+  raised to --cpu=4 on 2026-07-25 to cut both cold-start import time and per-predict latency
+  (team explicitly said cost is not a constraint here — do not "optimize" this back down without
+  checking first). Latency at --memory=8Gi --cpu=2 was ~52-56s/predict warm (2.5x the ~22s
+  measured locally); re-measure at cpu=4 rather than assuming the old number still holds. If a
+  redeploy ever drops back to 4Gi (e.g. a fresh `gcloud run deploy` on a brand-new service), it
+  will crash-loop identically to how avocado-serving-00006/00007 did — check memory first, don't
+  re-debug from scratch. requirements-preprocess.txt pins opencv-python-headless==4.10.0.84 — do
+  NOT let it float to latest (5.0.0.93 ships a broken wheel: pip reports success but
+  site-packages/cv2/ has no native module, so `import cv2` raises ModuleNotFoundError at container
+  startup).
+
+  ⚠️ Concurrency is ALSO a deploy-time-only flag, same trap as memory/cpu above. `/predict` is
+  `async def` but runs InSPyReNet + the AutoML call synchronously inline (no thread-pool offload),
+  which blocks the whole event loop for ~50-60s per request. With the Cloud Run default
+  containerConcurrency (80), concurrent requests landing on the same warm instance queue behind
+  each other instead of running in parallel — confirmed in prod logs (2026-07-24): normal
+  ~50-65s/predict ballooned to 170-245s whenever a 2nd request arrived within ~60s of the first,
+  which reads as a client-side timeout. Partial fix: `--concurrency=1` (forces Cloud Run to scale
+  OUT to a new instance per concurrent request instead of queuing) with `--max-instances=10`.
+
+  ⚠️ That alone was NOT enough: with only `--min-instances=1` warm, any 2nd+ concurrent request
+  still hit a COLD instance, and cold start (import torch + google.cloud.aiplatform +
+  transparent_background, then load InSPyReNet) measured ~2.5-3 minutes in prod logs — same
+  166-245s symptom, different cause (cold start, not queuing). Fixed by setting
+  `--min-instances=10` (== max-instances, cost-accepted deliberately per team decision 2026-07-25)
+  so every instance up to the scaling ceiling is always warm — no cold start possible within that
+  ceiling. If a redeploy ever resets min-instances below max-instances, the multi-minute-response
+  symptom comes back via cold start instead of queuing; check `minScale`/`maxScale` together with
+  `containerConcurrency`, not just one of them.
+  The real long-term fix would be offloading `_predict_one` to a thread pool (e.g.
+  `run_in_threadpool`) so a single instance can genuinely handle concurrent requests without
+  needing 10 always-warm instances; not done yet.
 
   The serving image has NO pandas — data.py / shelf_life.py keep pandas as a lazy/TYPE_CHECKING import.
   Don't add a top-level pandas import to anything the serving container imports.

@@ -21,7 +21,7 @@ SMOKE="${SMOKE:-0}"
 MACHINE="${MACHINE:-n1-standard-8}"
 GPU="${GPU:-1}"                          # GPUs to attach; GPU=0 -> CPU-only (the GMM baseline needs no GPU)
 ACCEL="${ACCEL:-NVIDIA_TESLA_T4}"
-DISPLAY_NAME="${DISPLAY_NAME:-avocado-${EXP_ID}$([ "$SMOKE" = "1" ] && echo -smoke)}"
+DISPLAY_NAME="${DISPLAY_NAME:-avocado-${EXP_ID}$([ "$SMOKE" = "1" ] && echo -smoke || true)}"  # || true: keep the $() exit 0 under set -e when SMOKE!=1
 
 # Generate a config YAML holding the worker-pool spec + container env (the --worker-pool-spec shorthand doesn't support env)
 # Created in the current directory (avoids the issue where Windows gcloud can't read /tmp paths). Deleted on exit.
