@@ -234,6 +234,16 @@ The Spring backend (davocado-server) calls serving/app.py on Cloud Run. Full spe
   (see preprocess.py module docstring for the model comparison). ⚠️ SEGMENTER=rembg is the fast/
   light fallback (~1-3s/image) if InSPyReNet's latency (below) ever needs to be dialed back.
 
+  ⚠️ EXIF orientation: load user photos with preprocess.load_rgb(), never a bare Image.open().
+  Phone photos are stored landscape with an orientation tag; PIL does not apply it, but the
+  segmenters do apply it internally before predicting (rembg calls ImageOps.exif_transpose in
+  remove()). The mask therefore came back rotated relative to the image and apply_mask_white
+  silently squashed it to fit — every portrait photo (orientation 6/8) produced a mostly-black
+  crop and a garbage prediction, with no error anywhere. Fixed 2026-08 by normalising in
+  load_rgb() (idempotent: it strips the tag it consumed) and making a mask/image aspect-ratio
+  mismatch raise instead of resample. Worth re-checking whether this contributed to the "ResNet
+  collapses on real phone photos" diagnosis below, which was made while this bug was live.
+
   MODEL_BACKEND=automl (live, 2026-07): /predict calls a teammate's cross-project Vertex AI AutoML
   Endpoint (project qiautoml1) instead of the local ResNet — the local ResNet was collapsing to
   stage-1/confidence≈1.0 on real phone photos (domain-gap failure). ResNet code/checkpoint kept,

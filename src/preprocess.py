@@ -26,6 +26,14 @@ plugs into the same geometry core. Three backends:
   - Sam3Segmenter (SAM3)    ← FUTURE SWAP. Concept prompt "avocado" (precise, avocado-only) but
     heavy (~3.5 GB), GPU-only-practical, and its weights are gated on Hugging Face.
 
+Orientation. Phone photos are usually stored landscape with an EXIF orientation tag telling the
+viewer to rotate (6/8 = portrait). PIL does NOT apply that tag on open, but the segmenters DO
+apply it internally before predicting (rembg calls ImageOps.exif_transpose in remove(); see
+rembg/bg.py). So the mask came back in display orientation while the image was still in stored
+orientation, and the two disagreed about the photo's geometry — a 4000x2252 image against a
+2252x4000 mask. load_rgb() now normalises orientation up front for everyone; exif_transpose is
+idempotent (it strips the tag it consumed), so the segmenter's own call becomes a no-op.
+
 The geometry core (mask → bbox → crop → pad → resize) is pure PIL/NumPy and unit-testable
 without any segmenter. No avocado found → NoAvocadoDetected (serving turns this into the
 backend's {"error": ...} → 422 NO_AVOCADO_DETECTED). This module does NOT decide where it runs.
@@ -48,6 +56,10 @@ if TYPE_CHECKING:  # keep torch/PIL/rembg/ultralytics out of import time for the
 CONCEPT = "avocado"          # SAM3 promptable-concept noun phrase (unused by rembg)
 DEFAULT_MARGIN_FRAC = 0.08   # expand the mask bbox by this fraction of its size before cropping
 WHITE = (255, 255, 255)      # light-box background (matches paper_train_transform fill=255)
+# Relative tolerance when comparing mask vs image aspect ratio (align_mask_to_image). Generous:
+# a pure rescale keeps the ratio to well under 1% (4000x2252 -> 1024x577 is 0.09% off), while an
+# orientation mismatch flips it entirely (1.776 vs 0.563).
+ASPECT_TOL = 0.02
 
 
 class NoAvocadoDetected(Exception):
@@ -69,7 +81,7 @@ class InSPyReNetSegmenter:
         self._remover = Remover(mode=mode, device=device)
 
     def mask(self, image) -> np.ndarray | None:
-        m = self._remover.process(_to_pil(image), type="map", threshold=0.5)
+        m = self._remover.process(load_rgb(image), type="map", threshold=0.5)
         arr = np.asarray(m)[..., 0] > 127
         return arr if arr.any() else None
 
@@ -94,7 +106,7 @@ class RembgSegmenter:
     def mask(self, image) -> np.ndarray | None:
         from rembg import remove
 
-        m = remove(_to_pil(image), session=self._session, only_mask=True, post_process_mask=True)
+        m = remove(load_rgb(image), session=self._session, only_mask=True, post_process_mask=True)
         arr = np.asarray(m) > 127
         return arr if arr.any() else None
 
@@ -165,17 +177,54 @@ def mask_to_bbox(mask: np.ndarray, margin_frac: float = DEFAULT_MARGIN_FRAC) -> 
     return (max(x0 - mx, 0), max(y0 - my, 0), min(x1 + mx, w), min(y1 + my, h))
 
 
+def align_mask_to_image(mask: np.ndarray, image) -> np.ndarray:
+    """Put `mask` in the image's pixel coordinates, or raise if the two disagree on geometry.
+
+    A segmenter may legitimately return the mask at a different RESOLUTION than the input (some
+    models predict at a fixed size); that is a pure rescale and is resampled here. A different
+    ASPECT RATIO is never legitimate — it means the mask and the image disagree about the photo's
+    shape, in practice because EXIF orientation was applied to one and not the other (a 4000x2252
+    photo against a 2252x4000 mask). That case used to be silently squashed to fit, which produced
+    a confident-looking but completely wrong crop instead of an error, so it raises now.
+
+    Call this ONCE after segmenting: mask_to_bbox and apply_mask_white then share one coordinate
+    space, so the bbox indexes the same pixels that got whited out.
+    """
+    from PIL import Image
+
+    iw, ih = image.size
+    mh, mw = mask.shape
+    if (mh, mw) == (ih, iw):
+        return mask
+    img_aspect, mask_aspect = iw / ih, mw / mh
+    if abs(mask_aspect - img_aspect) > ASPECT_TOL * img_aspect:
+        raise ValueError(
+            f"mask/image geometry mismatch: mask is {mw}x{mh} (aspect {mask_aspect:.3f}) but the "
+            f"image is {iw}x{ih} (aspect {img_aspect:.3f}), differing by more than "
+            f"{ASPECT_TOL:.0%}. They disagree about the photo's orientation — most likely EXIF "
+            "orientation was applied to one and not the other. Feed the segmenter the same image "
+            "load_rgb() returned (it normalises orientation) rather than a raw Image.open()."
+        )
+    return np.asarray(
+        Image.fromarray(mask.astype(np.uint8) * 255).resize((iw, ih), Image.NEAREST)) > 127
+
+
 def apply_mask_white(image, mask: np.ndarray, fill=WHITE) -> "Image.Image":
     """Replace every non-avocado pixel with white so only the fruit remains — this is the
-    actual background removal that matches the light-box's clean white background. The mask is
-    nearest-resized to the image if their resolutions differ (defensive)."""
+    actual background removal that matches the light-box's clean white background.
+
+    The mask must already be in the image's coordinates (align_mask_to_image); a mismatch raises
+    rather than being resampled here, so a geometry bug surfaces at its source instead of being
+    absorbed into a plausible-looking crop.
+    """
     from PIL import Image
 
     arr = np.asarray(image.convert("RGB")).copy()
     if mask.shape != arr.shape[:2]:
-        mask = np.asarray(
-            Image.fromarray(mask.astype(np.uint8) * 255).resize(
-                (arr.shape[1], arr.shape[0]), Image.NEAREST)) > 127
+        raise ValueError(
+            f"mask {mask.shape} does not match image {arr.shape[:2]}; "
+            "call align_mask_to_image(mask, image) first"
+        )
     arr[~mask] = fill
     return Image.fromarray(arr)
 
@@ -206,30 +255,40 @@ def preprocess_real_photo(image, segmenter, img_size: int = 224,
     """
     from PIL import Image
 
-    pil = _to_pil(image)
+    pil = load_rgb(image)          # display orientation, EXIF tag stripped
     mask = segmenter.mask(pil)
     if mask is None:
         raise NoAvocadoDetected("segmenter found no avocado in the image")
+    # One alignment for both consumers below, so the bbox indexes the pixels that got whited out.
+    mask = align_mask_to_image(mask, pil)
     if remove_background:
         pil = apply_mask_white(pil, mask)
     square = crop_pad_square(pil, mask_to_bbox(mask, margin_frac))
     return square.resize((img_size, img_size), Image.BILINEAR)
 
 
-def _to_pil(image) -> "Image.Image":
-    """Accept a PIL image, ndarray, or path and return a PIL RGB image."""
-    if hasattr(image, "crop"):  # already PIL
-        return image.convert("RGB")
-    from PIL import Image
+def load_rgb(image) -> "Image.Image":
+    """Accept a PIL image, ndarray, or path and return a PIL RGB image in DISPLAY orientation.
 
-    if isinstance(image, np.ndarray):
-        return Image.fromarray(image).convert("RGB")
-    return Image.open(image).convert("RGB")
+    EXIF orientation is applied here and the tag is stripped (see the module docstring): this is
+    the single point where every caller — and every segmenter downstream — agrees on which way is
+    up. Note that .convert("RGB") alone does NOT drop the tag, so normalising has to be explicit.
+    ndarray/tag-less inputs are unaffected (exif_transpose is a no-op without an orientation tag).
+    """
+    from PIL import Image, ImageOps
+
+    if hasattr(image, "crop"):  # already PIL
+        pil = image
+    elif isinstance(image, np.ndarray):
+        pil = Image.fromarray(image)
+    else:
+        pil = Image.open(image)
+    return ImageOps.exif_transpose(pil).convert("RGB")
 
 
 def _to_ndarray(image) -> np.ndarray:
     """HxWx3 uint8 RGB ndarray (for SAM3, which takes arrays)."""
-    return np.asarray(_to_pil(image))
+    return np.asarray(load_rgb(image))
 
 
 if __name__ == "__main__":
@@ -238,8 +297,6 @@ if __name__ == "__main__":
     #   python -m src.preprocess --image a.jpg --backend rembg                    # fast/light
     #   python -m src.preprocess --image a.jpg --backend sam3 --weights sam3.pt   # SAM3 (needs GPU)
     import argparse
-
-    from PIL import Image
 
     ap = argparse.ArgumentParser(description="Background-removal preprocessing for one photo")
     ap.add_argument("--image", required=True)
@@ -261,8 +318,8 @@ if __name__ == "__main__":
         kw = {}
     seg = load_segmenter(args.backend, **kw)
     try:
-        result = preprocess_real_photo(
-            Image.open(args.image).convert("RGB"), seg,
+        result = preprocess_real_photo(     # takes a path directly; load_rgb normalises orientation
+            args.image, seg,
             img_size=args.img_size, remove_background=not args.keep_background)
     except NoAvocadoDetected as e:
         raise SystemExit(f"No avocado detected: {e}")

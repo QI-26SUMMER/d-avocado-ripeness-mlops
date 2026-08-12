@@ -65,7 +65,6 @@ from pathlib import Path
 import torch
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from PIL import Image
 
 import sys
 
@@ -73,6 +72,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from data import LABELS  # noqa: E402
 from models import build_model  # noqa: E402
+# load_rgb only needs numpy at import time (the segmenter deps stay lazy), so importing it
+# unconditionally is safe even when ENABLE_CROP=0.
+from preprocess import load_rgb  # noqa: E402
 from shelf_life import alpha_from_temp, estimate_days_to_target  # noqa: E402
 from transforms import evaluation_transform  # noqa: E402
 
@@ -274,7 +276,11 @@ def _classify_automl(img) -> tuple[int, list[float]]:
 
 
 def _predict_one(image_bytes: bytes, target_stage=None, temp_celsius: float = 20.0) -> dict:
-    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    # load_rgb, not Image.open: phone uploads carry an EXIF orientation tag that PIL does not
+    # apply on open, so without this a portrait photo reaches the classifier lying on its side
+    # (and, with cropping on, disagrees with the segmenter's mask). Idempotent — the crop path
+    # below normalises again harmlessly.
+    img = load_rgb(io.BytesIO(image_bytes))
     cropped_b64 = None
     seg = _state.get("segmenter")
     if seg is not None:

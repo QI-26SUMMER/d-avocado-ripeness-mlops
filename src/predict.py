@@ -21,17 +21,18 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from PIL import Image
 
 try:
     from .data import LABELS
     from .models import build_model
+    from .preprocess import load_rgb
     from .shelf_life import ALPHA_5STAGE, estimate_days_left
     from .transforms import evaluation_transform
     from .utils import OUTPUT_DIR, get_device
 except ImportError:
     from data import LABELS
     from models import build_model
+    from preprocess import load_rgb
     from shelf_life import ALPHA_5STAGE, estimate_days_left
     from transforms import evaluation_transform
     from utils import OUTPUT_DIR, get_device
@@ -82,7 +83,9 @@ def bar(p: float, width: int = 20) -> str:
 
 
 def predict(model, tf, path: Path, device: str):
-    img = Image.open(path).convert("RGB")
+    # load_rgb, not Image.open: phone photos carry an EXIF orientation tag that PIL does not
+    # apply, which would feed the classifier a sideways image (see preprocess.py).
+    img = load_rgb(path)
     x = tf(img).unsqueeze(0).to(device)
     with torch.no_grad():
         probs = torch.softmax(model(x), 1)[0].cpu().numpy()
