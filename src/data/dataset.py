@@ -4,7 +4,7 @@ The model input is a single RGB image only (§1). Metadata such as Storage Group
 view/Time Stamp/days_left/color statistics must never go into the model input -- they're
 only for filtering, splitting, aggregation, shelf-life, and analysis purposes.
 
-The split reuses splits.csv produced by src/split.py (shared by all models).
+The split reuses splits.csv produced by src/data/split.py (shared by all models).
 """
 from __future__ import annotations
 
@@ -15,11 +15,11 @@ from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 
 try:
+    from ..common.utils import OUTPUT_DIR, seed_worker
     from .data import IMAGE_DIR
-    from .utils import OUTPUT_DIR, seed_worker
-except ImportError:
-    from data import IMAGE_DIR
-    from utils import OUTPUT_DIR, seed_worker
+except ImportError:  # src/ on sys.path (tests, serving): `..` would escape the top-level package
+    from common.utils import OUTPUT_DIR, seed_worker
+    from data.data import IMAGE_DIR
 
 METADATA_CLEAN = OUTPUT_DIR / "splits" / "metadata_clean.csv"
 SPLITS_CSV = OUTPUT_DIR / "splits" / "splits.csv"
@@ -37,7 +37,7 @@ DATASET_GROUPS = {
 def load_metadata_and_splits() -> pd.DataFrame:
     """Attach the Split column from splits.csv onto metadata_clean.csv and return it."""
     if not METADATA_CLEAN.exists() or not SPLITS_CSV.exists():
-        raise SystemExit("Run `python -m src.validate_data` and `python -m src.split` first.")
+        raise SystemExit("Run `python -m src.data.validate_data` and `python -m src.data.split` first.")
     meta = pd.read_csv(METADATA_CLEAN)
     splits = pd.read_csv(SPLITS_CSV)
     merged = meta.merge(splits[["Storage Group", "Sample", "Split"]],

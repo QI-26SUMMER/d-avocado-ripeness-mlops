@@ -1,8 +1,8 @@
 """Evaluation — image-level / best-side / two-side + shelf-life (paper reproduction §12·§13).
 
 Usage:
-  python -m src.evaluate --config configs/paper/general_resnet18.yaml   # single experiment
-  python -m src.evaluate --all                                          # all experiments
+  python -m src.training.evaluate --config configs/paper/general_resnet18.yaml   # single experiment
+  python -m src.training.evaluate --all                                          # all experiments
 
 Clearly separates three evaluation modes (§12.2):
   A. Image-level          : each image treated independently
@@ -23,19 +23,19 @@ import pandas as pd
 import torch
 
 try:
-    from .dataset import AvocadoImageDataset, load_metadata_and_splits, subset_frame
-    from .metrics import image_level_metrics
-    from .models import build_model
-    from .shelf_life import ALPHA_5STAGE, derive_actual_days_left, estimate_days_left
-    from .transforms import evaluation_transform
-    from .utils import OUTPUT_DIR, get_device, load_config, save_json
-except ImportError:
-    from dataset import AvocadoImageDataset, load_metadata_and_splits, subset_frame
-    from metrics import image_level_metrics
-    from models import build_model
-    from shelf_life import ALPHA_5STAGE, derive_actual_days_left, estimate_days_left
-    from transforms import evaluation_transform
-    from utils import OUTPUT_DIR, get_device, load_config, save_json
+    from ..common.metrics import image_level_metrics
+    from ..common.models import build_model
+    from ..common.shelf_life import ALPHA_5STAGE, derive_actual_days_left, estimate_days_left
+    from ..common.transforms import evaluation_transform
+    from ..common.utils import OUTPUT_DIR, get_device, load_config, save_json
+    from ..data.dataset import AvocadoImageDataset, load_metadata_and_splits, subset_frame
+except ImportError:  # src/ on sys.path (tests, serving): `..` would escape the top-level package
+    from common.metrics import image_level_metrics
+    from common.models import build_model
+    from common.shelf_life import ALPHA_5STAGE, derive_actual_days_left, estimate_days_left
+    from common.transforms import evaluation_transform
+    from common.utils import OUTPUT_DIR, get_device, load_config, save_json
+    from data.dataset import AvocadoImageDataset, load_metadata_and_splits, subset_frame
 
 OBS_KEYS = ["Storage Group", "Sample", "Day of Experiment"]
 

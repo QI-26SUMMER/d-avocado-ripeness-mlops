@@ -1,4 +1,4 @@
-"""Tests for the real-photo preprocessing geometry core (src/preprocess.py).
+"""Tests for the real-photo preprocessing geometry core (src/inference/preprocess.py).
 
 Regression coverage for the EXIF-orientation bug: phone photos are stored landscape with an
 orientation tag, PIL does not apply it on open, but the segmenters do apply it internally before
@@ -24,7 +24,7 @@ from PIL import Image, ImageOps
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from preprocess import (  # noqa: E402
+from inference.preprocess import (  # noqa: E402
     ASPECT_TOL,
     NoAvocadoDetected,
     align_mask_to_image,

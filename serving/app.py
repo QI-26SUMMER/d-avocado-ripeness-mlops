@@ -37,8 +37,8 @@ Response: {"predictions": [{"predicted_stage": 3, "label": "Ripe(1)", "hint": "R
   is given (absent -> field omitted -> backend stores null).
 
   cropped_b64 (method A): when ENABLE_CROP=1, the image is background-removal cropped
-  (src/preprocess.py, InSPyReNet by default, ~20-22s/image on CPU) BEFORE classification, and
-  the 224px crop is returned as raw base64 JPEG. The backend saves it
+  (src/inference/preprocess.py, InSPyReNet by default, ~20-22s/image on CPU) BEFORE
+  classification, and the 224px crop is returned as raw base64 JPEG. The backend saves it
   (cropped/{user_id}/{scan_id}.jpg) and sets images.cropped_url. Absent when cropping is off ->
   backend leaves cropped_url null.
   Per-image failures return {"error": "..."} -> backend maps to NO_AVOCADO_DETECTED.
@@ -70,13 +70,13 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from data import LABELS  # noqa: E402
-from models import build_model  # noqa: E402
+from common.labels import LABELS  # noqa: E402
+from common.models import build_model  # noqa: E402
+from common.shelf_life import alpha_from_temp, estimate_days_to_target  # noqa: E402
+from common.transforms import evaluation_transform  # noqa: E402
 # load_rgb only needs numpy at import time (the segmenter deps stay lazy), so importing it
 # unconditionally is safe even when ENABLE_CROP=0.
-from preprocess import load_rgb  # noqa: E402
-from shelf_life import alpha_from_temp, estimate_days_to_target  # noqa: E402
-from transforms import evaluation_transform  # noqa: E402
+from inference.preprocess import load_rgb  # noqa: E402
 
 STAGE_HINT = {1: "Unripe (firm)", 2: "Breaking", 3: "Ready to eat",
               4: "Peak (end of shelf life)", 5: "Overripe (too late)"}
@@ -86,8 +86,8 @@ PREDICT_ROUTE = os.environ.get("AIP_PREDICT_ROUTE", "/predict")
 HTTP_PORT = int(os.environ.get("AIP_HTTP_PORT", "8080"))
 STORAGE_URI = os.environ.get("AIP_STORAGE_URI")
 LOCAL_MODEL_DIR = Path(os.environ.get("LOCAL_MODEL_DIR", "/tmp/model"))
-# Background-removal crop (src/preprocess.py). Off by default so the current CPU Cloud Run deploy
-# is unchanged; turn on with ENABLE_CROP=1 (also needs the preprocess deps in the image, see
+# Background-removal crop (src/inference/preprocess.py). Off by default so the current CPU Cloud
+# Run deploy is unchanged; turn on with ENABLE_CROP=1 (also needs the preprocess deps, see
 # requirements-preprocess.txt). SEGMENTER=inspyrenet (default, ~20-22s/image CPU, best edge
 # quality of the CPU options compared) | 'rembg' (fast/light, ~1.6s/image) | 'sam3' (GPU only).
 ENABLE_CROP = os.environ.get("ENABLE_CROP", "0") == "1"
@@ -190,7 +190,7 @@ def _startup() -> None:
     if ENABLE_CROP:
         # lazy: pulls the segmenter's deps (transparent-background / rembg / ultralytics) only
         # when cropping is on.
-        from preprocess import load_segmenter
+        from inference.preprocess import load_segmenter
 
         if SEGMENTER == "sam3":
             kw = {"weights": SAM3_WEIGHTS, "device": _state["device"]}
@@ -287,7 +287,7 @@ def _predict_one(image_bytes: bytes, target_stage=None, temp_celsius: float = 20
         # Background-removal crop (§3 domain gap). Classify the CROP, not the raw photo, and hand
         # the crop back to the backend. A NoAvocadoDetected raise propagates to predict()'s
         # per-image try/except -> {"error": ...} -> backend NO_AVOCADO_DETECTED.
-        from preprocess import preprocess_real_photo
+        from inference.preprocess import preprocess_real_photo
 
         img_size = _state["cfg"].get("img_size", CROP_IMG_SIZE) if _state["cfg"] else CROP_IMG_SIZE
         img = preprocess_real_photo(img, seg, img_size=img_size)

@@ -1,8 +1,8 @@
 """Training (config-driven) — paper reproduction §10·§11.
 
 Usage:
-  python -m src.train --config configs/paper/general_resnet18.yaml --smoke-test
-  python -m src.train --config configs/paper/general_resnet18.yaml
+  python -m src.training.train --config configs/paper/general_resnet18.yaml --smoke-test
+  python -m src.training.train --config configs/paper/general_resnet18.yaml
 
 Paper-published settings: epochs>=30, batch 128, ResNet-18 lr 0.01 (10ep×0.1), AlexNet lr
   0.001 (10ep×0.1), validation every 10 iters, patience 150 checks, saves best val
@@ -21,19 +21,19 @@ import torch
 import torch.nn as nn
 
 try:
-    from .dataset import load_metadata_and_splits, make_loader, subset_frame
-    from .metrics import image_level_metrics, summarize
-    from .models import build_model
+    from ..common.metrics import image_level_metrics, summarize
+    from ..common.models import build_model
+    from ..common.transforms import build_train_transform, evaluation_transform
+    from ..common.utils import OUTPUT_DIR, get_device, git_commit_hash, load_config, save_json, set_seed
+    from ..data.dataset import load_metadata_and_splits, make_loader, subset_frame
     from .sampler import effective_class_counts, paper_oversample_indices
-    from .transforms import build_train_transform, evaluation_transform
-    from .utils import OUTPUT_DIR, get_device, git_commit_hash, load_config, save_json, set_seed
-except ImportError:
-    from dataset import load_metadata_and_splits, make_loader, subset_frame
-    from metrics import image_level_metrics, summarize
-    from models import build_model
-    from sampler import effective_class_counts, paper_oversample_indices
-    from transforms import build_train_transform, evaluation_transform
-    from utils import OUTPUT_DIR, get_device, git_commit_hash, load_config, save_json, set_seed
+except ImportError:  # src/ on sys.path (tests, serving): `..` would escape the top-level package
+    from common.metrics import image_level_metrics, summarize
+    from common.models import build_model
+    from common.transforms import build_train_transform, evaluation_transform
+    from common.utils import OUTPUT_DIR, get_device, git_commit_hash, load_config, save_json, set_seed
+    from data.dataset import load_metadata_and_splits, make_loader, subset_frame
+    from training.sampler import effective_class_counts, paper_oversample_indices
 
 
 def build_optimizer(model, cfg):
@@ -77,7 +77,7 @@ def train(cfg: dict, smoke: bool = False,
     ckpt_dir = OUTPUT_DIR / "checkpoints" / exp_id
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-    # Single-split default: read the fixed train/val from splits.csv. K-fold CV (src/cv_train.py)
+    # Single-split default: read the fixed train/val from splits.csv. K-fold CV (cv_train.py)
     # passes its own per-fold frames + exp_id instead.
     if train_df is None or val_df is None:
         merged = load_metadata_and_splits()

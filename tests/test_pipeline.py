@@ -4,7 +4,7 @@ Run (either works):
   python -m pytest tests/test_pipeline.py -q
   python tests/test_pipeline.py            # also runs without pytest
 
-Prerequisite: python -m src.validate_data ; python -m src.split --seed 42
+Prerequisite: python -m src.data.validate_data ; python -m src.data.split --seed 42
 Some tests (model forward / checkpoint) actually use images and torch.
 """
 import sys
@@ -16,11 +16,11 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from dataset import AvocadoImageDataset, load_metadata_and_splits, subset_frame  # noqa: E402
-from shelf_life import ALPHA_5STAGE, estimate_days_left  # noqa: E402
-from transforms import evaluation_transform, paper_train_transform  # noqa: E402
-from sampler import effective_class_counts, paper_oversample_indices  # noqa: E402
-from utils import OUTPUT_DIR  # noqa: E402
+from data.dataset import AvocadoImageDataset, load_metadata_and_splits, subset_frame  # noqa: E402
+from common.shelf_life import ALPHA_5STAGE, estimate_days_left  # noqa: E402
+from common.transforms import evaluation_transform, paper_train_transform  # noqa: E402
+from training.sampler import effective_class_counts, paper_oversample_indices  # noqa: E402
+from common.utils import OUTPUT_DIR  # noqa: E402
 
 SPLITS = pd.read_csv(OUTPUT_DIR / "splits" / "splits.csv")
 META = pd.read_csv(OUTPUT_DIR / "splits" / "metadata_clean.csv")
@@ -115,7 +115,7 @@ def test_10_missing_images_not_in_dataset():
 
 def test_11_checkpoint_reload_same_prediction():
     import torch
-    from models import build_model
+    from common.models import build_model
     ckpts = list((OUTPUT_DIR / "checkpoints").glob("*/best.pt"))
     if not ckpts:
         print("  [test_11 skip] no checkpoint found")

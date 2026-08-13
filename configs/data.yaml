@@ -1,9 +1,9 @@
-# Data paths / default settings (paper reproduction §16 python -m src.validate_data)
-# The actual image path has one level of nesting per CLAUDE.md §1. IMAGE_DIR in src/data.py is the reference.
+# Data paths / default settings (paper reproduction §16 python -m src.data.validate_data)
+# The actual image path has one level of nesting per CLAUDE.md §1. IMAGE_DIR in src/data/data.py is the reference.
 metadata_xlsx: data/Avocado Ripening Dataset.xlsx
 num_classes: 5
 img_size: 224
-# split (src/split.py --seed)
+# split (src/data/split.py --seed)
 split:
   seed: 42
   ratios: [0.70, 0.15, 0.15]   # train/val/test, Sample-level (§4)

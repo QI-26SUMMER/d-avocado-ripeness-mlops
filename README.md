@@ -36,29 +36,29 @@ the full 478-sample dataset instead, delete the manifest file or unset `AVOCADO_
 
 ```bash
 # 1) Data integrity checks → metadata_clean.csv (applies the curated manifest)
-python -m src.validate_data                 # (--skip-image-check to skip the corruption check)
+python -m src.data.validate_data                 # (--skip-image-check to skip the corruption check)
 
 # 2) Sample-level 70/15/15 split → splits.csv (shared by all models, leakage-verification assert)
-python -m src.split --seed 42
+python -m src.data.split --seed 42
 
 # 3) Pipeline check (smoke)
-python -m src.train --config configs/paper/general_resnet18.yaml --smoke-test
+python -m src.training.train --config configs/paper/general_resnet18.yaml --smoke-test
 
 # 4) Individual training (e.g., General × ResNet-18). --val-freq is a practical override
-python -m src.train --config configs/paper/general_resnet18.yaml --val-freq 80
+python -m src.training.train --config configs/paper/general_resnet18.yaml --val-freq 80
 
 # 5) Train + evaluate all 8 experiments
 python scripts/run_paper_experiments.py
 
 # 6) Evaluation only (against trained checkpoints)
-python -m src.evaluate --all
-python -m src.evaluate --config configs/paper/general_resnet18.yaml
+python -m src.training.evaluate --all
+python -m src.training.evaluate --config configs/paper/general_resnet18.yaml
 
 # 7) Group-aware k-fold cross-validation (resumable — see "K-fold CV" below)
-python -m src.cv_train --config configs/paper/general_resnet18.yaml --folds 5
+python -m src.training.cv_train --config configs/paper/general_resnet18.yaml --folds 5
 
 # 8) Classical-ML color baseline for comparison (see "GMM baseline" below)
-python -m src.gmm_baseline --dataset general --components 2
+python -m src.training.gmm_baseline --dataset general --components 2
 
 # 9) Pipeline tests
 python tests/test_pipeline.py
@@ -82,7 +82,7 @@ the cross-track bars as **directional, not final** (see MODEL_SUMMARY §1).
 ![Precision and recall across ResNet-18, AutoML Raw, AutoML Balanced, and the GMM color baseline](assets/model-summary/cross_model_precision_recall.png)
 
 ## GMM color baseline (classical ML comparison)
-`src/gmm_baseline.py` — a non-deep-learning comparison point: each image → mean color stats of the avocado
+`src/training/gmm_baseline.py` — a non-deep-learning comparison point: each image → mean color stats of the avocado
 (non-white) pixels (`"rgb"` = 3-D mean RGB, `"rich"` = +std/HSV/Lab, 12-D); one `GaussianMixture` per ripeness
 stage fit on train; classify by max posterior. Same split/manifest/metrics as ResNet, so results are directly
 comparable. On curated-392 `general`: **rgb 0.556 / rich 0.650 exact accuracy** vs **ResNet-18 ≈0.81** —
@@ -90,7 +90,7 @@ color alone gets ordinal ranking mostly right (QWK 0.84–0.89 vs ResNet's 0.95)
 adjacent-stage boundaries the way the CNN does. Emits an RGB/Lab scatter PNG and a per-image feature CSV.
 
 ## K-fold cross-validation
-`src/cv_train.py` — group-aware k-fold (split on `(Storage Group, Sample)`, never image-level, CLAUDE.md §2.1)
+`src/training/cv_train.py` — group-aware k-fold (split on `(Storage Group, Sample)`, never image-level, CLAUDE.md §2.1)
 for a more robust accuracy estimate than the single fixed split. **Resumable**: each fold's result is cached
 to `cv/<exp>/fold<f>.json`, so an interrupted run (folds take hours on CPU) picks up where it left off instead
 of restarting; `--recover-folds "0,1"` re-evaluates an existing `best.pt` for those folds instead of retraining.
@@ -111,13 +111,26 @@ outputs/paper_reproduction/
 Checkpoints (*.pt) and images are excluded from commits via .gitignore.
 
 ## Code structure (src/)
-`data.py` (metadata loading, `filter_to_manifest`) · `validate_data.py` (integrity → metadata_clean.csv) ·
-`split.py` (sample-level split) · `transforms.py` (paper/eval/noaug) · `sampler.py` (random oversampling) ·
-`dataset.py` (image Dataset) · `models.py` (ResNet-18/AlexNet) · `train.py` (config-driven training, single
-split or injected fold frames) · `cv_train.py` (resumable group-aware k-fold) · `evaluate.py` (image/best-side/
-two-side) · `gmm_baseline.py` (classical-ML color comparison) · `preprocess.py` (inference-only real-photo
-background-removal crop — see Serving) · `shelf_life.py` (shelf-life α formulas, paper + serving) · `predict.py`
-(CLI inference) · `metrics.py` · `utils.py`.
+Split by pipeline stage. `data/`, `training/` and `inference/` all import from `common/`, never the
+reverse — run them as `python -m src.<package>.<module>`.
+
+**`common/`** — shared by every stage.
+`labels.py` (stage names, `NUM_CLASSES`) · `utils.py` (seeding, config, `OUTPUT_DIR`) ·
+`metrics.py` (ordinal metric bundle) · `models.py` (ResNet-18/AlexNet) · `transforms.py`
+(paper/eval/noaug) · `shelf_life.py` (shelf-life α formulas, paper + serving).
+
+**`data/`** — dataset preparation.
+`data.py` (metadata loading, `filter_to_manifest`) · `validate_data.py` (integrity →
+metadata_clean.csv) · `split.py` (sample-level split) · `dataset.py` (image Dataset).
+
+**`training/`** — needs the dataset on disk.
+`train.py` (config-driven training, single split or injected fold frames) · `cv_train.py`
+(resumable group-aware k-fold) · `evaluate.py` (image/best-side/two-side) · `sampler.py` (random
+oversampling) · `gmm_baseline.py` (classical-ML color comparison).
+
+**`inference/`** — the deployment path.
+`preprocess.py` (real-photo background-removal crop + `load_rgb`, the single EXIF-orientation
+normalisation point — see Serving) · `predict.py` (CLI inference).
 
 ## Serving (production)
 `serving/` — a FastAPI prediction container on **Cloud Run** (`avocado-serving`, GCP project `qi-2026summer`,
@@ -130,7 +143,7 @@ backend team directly).
   `qiautoml1`) rather than the local ResNet, because the local ResNet was observed collapsing to
   stage-1/confidence≈1.0 on real phone photos (domain-gap failure vs. the light-box training data). The
   ResNet checkpoint/code path is kept, not deleted — `MODEL_BACKEND=resnet` reverts with no code change.
-- `ENABLE_CROP=1`, `SEGMENTER=inspyrenet` (`src/preprocess.py`) — real photos are background-removal
+- `ENABLE_CROP=1`, `SEGMENTER=inspyrenet` (`src/inference/preprocess.py`) — real photos are background-removal
   cropped before classification (closes the CLAUDE.md §3 domain gap) and the crop is returned to the backend
   as `cropped_b64` (method A) for it to store. `SEGMENTER=rembg` is a faster/lighter fallback (~1-3s/image
   vs. InSPyReNet's ~50s+); `sam3` is a future GPU-only option.

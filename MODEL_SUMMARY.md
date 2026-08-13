@@ -253,7 +253,7 @@ while Stage 4 AP decreases slightly.
 
 ## 7. GMM Color Baseline
 
-A non-deep-learning comparison point (`src/gmm_baseline.py`): each image is reduced to the mean color
+A non-deep-learning comparison point (`src/training/gmm_baseline.py`): each image is reduced to the mean color
 statistics of its non-white (avocado) pixels, one `GaussianMixture` is fit per ripeness stage on the
 training split, and an image is classified by maximum posterior. It shares the **same curated manifest,
 split, and metrics** as the ResNet fixed-split run, so it is directly comparable to that run and serves as

@@ -1,6 +1,6 @@
 """Generate and validate a Sample-level 70/15/15 split (paper reproduction §4).
 
-Run: python -m src.split --seed 42
+Run: python -m src.data.split --seed 42
 - Splits each Storage Group 70/15/15 at the Sample level (image-level random split forbidden, §2.1).
 - General split = union of the per-storage-group splits (lets General/storage-group models be
   compared on the same test fruit -- an implementation choice).
@@ -20,9 +20,9 @@ import numpy as np
 import pandas as pd
 
 try:
-    from .utils import OUTPUT_DIR
-except ImportError:
-    from utils import OUTPUT_DIR
+    from ..common.utils import OUTPUT_DIR
+except ImportError:  # src/ on sys.path (tests, serving): `..` would escape the top-level package
+    from common.utils import OUTPUT_DIR
 
 SPLITS_CSV = OUTPUT_DIR / "splits" / "splits.csv"
 METADATA_CLEAN = OUTPUT_DIR / "splits" / "metadata_clean.csv"
@@ -99,7 +99,7 @@ def main() -> None:
     args = ap.parse_args()
 
     if not METADATA_CLEAN.exists():
-        raise SystemExit(f"Run `python -m src.validate_data` first: {METADATA_CLEAN} not found")
+        raise SystemExit(f"Run `python -m src.data.validate_data` first: {METADATA_CLEAN} not found")
     meta = pd.read_csv(METADATA_CLEAN)
 
     splits = make_splits(meta, seed=args.seed)

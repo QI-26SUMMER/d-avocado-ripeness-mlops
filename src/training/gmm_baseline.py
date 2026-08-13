@@ -14,9 +14,9 @@ Two feature sets, run side by side to isolate what richer color features buy:
 Features are z-scored (StandardScaler) before the GMM. (A full-covariance GMM is invariant to an
 affine rescale, so scaling only affects the non-affine 'rich' features / conditioning, not 'rgb'.)
 
-Run (after `python -m src.validate_data` and `python -m src.split`, with images on disk):
-  python -m src.gmm_baseline                          # general, 2 components/class, runs rgb + rich
-  python -m src.gmm_baseline --dataset general --components 3
+Run (after `python -m src.data.validate_data` and `python -m src.data.split`, with images on disk):
+  python -m src.training.gmm_baseline                          # general, 2 components/class, runs rgb + rich
+  python -m src.training.gmm_baseline --dataset general --components 3
 
 Deliberate choices (see CLAUDE.md):
   - Fit on TRAIN, evaluate on TEST — fitting on test would leak (§2.1/§4).
@@ -35,13 +35,13 @@ import numpy as np
 from PIL import Image
 
 try:
-    from .data import IMAGE_DIR
-    from .metrics import image_level_metrics, summarize
-    from .utils import OUTPUT_DIR, save_json, set_seed
-except ImportError:
-    from data import IMAGE_DIR
-    from metrics import image_level_metrics, summarize
-    from utils import OUTPUT_DIR, save_json, set_seed
+    from ..common.metrics import image_level_metrics, summarize
+    from ..common.utils import OUTPUT_DIR, save_json, set_seed
+    from ..data.data import IMAGE_DIR
+except ImportError:  # src/ on sys.path (tests, serving): `..` would escape the top-level package
+    from common.metrics import image_level_metrics, summarize
+    from common.utils import OUTPUT_DIR, save_json, set_seed
+    from data.data import IMAGE_DIR
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -142,7 +142,7 @@ def load_split_frames(dataset: str = "general"):
     import pandas as pd
 
     if not METADATA_CLEAN.exists() or not SPLITS_CSV.exists():
-        raise SystemExit("Run `python -m src.validate_data` and `python -m src.split` first "
+        raise SystemExit("Run `python -m src.data.validate_data` and `python -m src.data.split` first "
                          f"({METADATA_CLEAN} / {SPLITS_CSV} not found).")
     if dataset not in DATASET_GROUPS:
         raise SystemExit(f"unknown dataset {dataset!r} (expected one of {list(DATASET_GROUPS)})")
