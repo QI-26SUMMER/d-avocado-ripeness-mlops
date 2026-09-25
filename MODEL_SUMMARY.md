@@ -74,7 +74,8 @@ its own split, so the bars are directional (§1).
 | Backbone | ResNet-18 |
 | Pretraining | ImageNet-pretrained |
 | Input size | 224 x 224 |
-| Deployment target | GCP Vertex AI Custom Job |
+| Training | GCP Vertex AI Custom Job |
+| Serving | Cloud Run AI service (`MODEL_BACKEND=resnet`; not the current production backend) |
 
 ### 4.2 Training Configuration
 
@@ -86,8 +87,8 @@ its own split, so the bars are directional (§1).
 | Seed | 42 |
 | Epochs | 30 |
 | Batch size | 128 |
-| Learning rate | 0.01 |
-| Early stopping patience | 150 |
+| Learning rate | 0.01 (StepLR, ×0.1 every 10 epochs) |
+| Early stopping patience | 150 validation checks (validation every 10 iterations) |
 
 ### 4.3 Validation Protocol
 
@@ -95,12 +96,14 @@ ResNet-18 uses 5-fold cross-validation.
 
 For round `r`:
 
-- Test fold: `fold r`
-- Validation fold: `fold (r + 1) % 5`
-- Training folds: the remaining three folds
+- Held-out fold: `fold r`, used as the validation fold for checkpoint selection (best checkpoint)
+- Training folds: the remaining four folds
 
-The test fold is never used for model selection. Folds are split on `(Storage Group, Sample)` — never
-image-level — so the same avocado never appears in both training and test (CLAUDE.md §2.1).
+The reported metrics are the held-out fold's metrics at the selected checkpoint (`cv_train.py`). Because the
+same fold is used for checkpoint selection, there is no separate test fold, so the CV numbers may be slightly
+optimistic; the single-split reproduction below reports a held-out test result. Folds are split on
+`(Storage Group, Sample)` — never image-level — so the same avocado never appears in both training and
+evaluation (CLAUDE.md §2.1).
 
 ### 4.4 Training-only Data Processing
 
@@ -117,7 +120,7 @@ Class balancing through oversampling is also applied only to the training fold.
 
 ### 4.5 Results
 
-Results are reported as 5-fold mean ± standard deviation over 13,192 images.
+Results are reported as 5-fold mean ± standard deviation of the held-out (validation) fold metrics over 13,192 images.
 
 | Metric | Result |
 | --- | --- |
@@ -140,9 +143,9 @@ Results are reported as 5-fold mean ± standard deviation over 13,192 images.
 - `fold4/best.pt` was selected as the deployment model.
 
 > **Deployment status.** ResNet-18 is the custom deployment *candidate*. Live serving traffic currently
-> routes to the AutoML Vision endpoint (`MODEL_BACKEND=automl`) because the ResNet collapsed to
-> stage-1 / confidence ≈ 1.0 on real phone photos (a light-box → phone domain gap, not an in-domain
-> accuracy problem); the ResNet path is kept and reverts with `MODEL_BACKEND=resnet` (CLAUDE.md §8).
+> routes to the AutoML Vision Balanced endpoint (`MODEL_BACKEND=automl`) because the ResNet collapsed to
+> stage-1 / confidence ≈ 1.0 on real phone photos (diagnosed as a light-box → phone domain gap, not an in-domain
+> accuracy problem; the diagnosis was made while the EXIF-orientation bug was live, see CLAUDE.md §8); the ResNet path is kept and reverts with `MODEL_BACKEND=resnet` (CLAUDE.md §8).
 
 ### 4.7 Confusion Matrix Diagonal
 
@@ -213,7 +216,7 @@ Stage 3 is the weakest class by AP in the raw AutoML model.
 | --- | --- |
 | Framework | GCP Vertex AI AutoML Vision |
 | Training mode | Managed training |
-| Class distribution | Balanced, 4,000 images per class |
+| Class distribution | Balanced to 4,000 images per class through data augmentation |
 
 ### 6.2 Dataset
 

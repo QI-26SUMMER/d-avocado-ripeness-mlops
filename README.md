@@ -4,7 +4,7 @@
 Reproduces the published method of Xavier et al. (Foods 2024, DOI 10.3390/foods13081150) as a training
 baseline, then goes beyond it: a curated-data retrain, a classical-ML (GMM) comparison baseline, group-aware
 k-fold cross-validation, and a live FastAPI prediction service on Cloud Run behind the Spring backend
-(`davocado-server`).
+(`davocado-backend`).
 
 **Current stage: training + serving.** For pitfalls, data-leakage rules, dataset facts, and the full serving
 contract, **[`CLAUDE.md`](CLAUDE.md) is the canonical operating manual** — read it before changing data
@@ -67,8 +67,8 @@ python tests/test_pipeline.py
 ## 8 experiments (5-stage, paper reproduction)
 `configs/paper/*.yaml` — {general, T10, T20, Tamb} × {ResNet-18, AlexNet}.
 experiment_id: `P1_general_resnet18_...` through `P8_tamb_alexnet_...`.
-Deployed to production: **P1 (general × ResNet-18)**, though `MODEL_BACKEND=automl` currently
-routes live traffic to a teammate's AutoML model instead (see Serving below).
+ResNet-18 serving candidate: **P1 (general × ResNet-18)**. Live traffic currently routes to a teammate's
+AutoML model instead via `MODEL_BACKEND=automl` (see Serving below).
 
 ## Model comparison (ResNet vs AutoML vs GMM)
 Full write-up — per-model architecture, training configs, per-class charts, and open evaluation gaps:
@@ -134,7 +134,7 @@ normalisation point — see Serving) · `predict.py` (CLI inference).
 
 ## Serving (production)
 `serving/` — a FastAPI prediction container on **Cloud Run** (`avocado-serving`, GCP project `qi-2026summer`,
-`us-central1`), called by the Spring backend (`davocado-server`). Full wire contract:
+`us-central1`), called by the Spring backend (`davocado-backend`). Full wire contract:
 **[`CLAUDE.md` §8](CLAUDE.md)** (invariants) and `docs/serving-contract.md` (git-ignored, forward to the
 backend team directly).
 
@@ -146,9 +146,9 @@ backend team directly).
 - `ENABLE_CROP=1`, `SEGMENTER=inspyrenet` (`src/inference/preprocess.py`) — real photos are background-removal
   cropped before classification (closes the CLAUDE.md §3 domain gap) and the crop is returned to the backend
   as `cropped_b64` (method A) for it to store. `SEGMENTER=rembg` is a faster/lighter fallback (~1-3s/image
-  vs. InSPyReNet's ~50s+); `sam3` is a future GPU-only option.
-- **Deploy requires `--memory=8Gi --cpu=2`** (InSPyReNet OOMs at Cloud Run's 4Gi default) — this is a
-  deploy-time flag only, not captured in any config file here; don't lose it on a fresh redeploy.
+  vs. InSPyReNet's ~20-22s/image on CPU, ~50-65s per request end-to-end on Cloud Run); `sam3` is a future GPU-only option.
+- **Deploy requires `--memory=8Gi --cpu=4 --concurrency=1 --min-instances=10 --max-instances=10`**
+  (InSPyReNet OOMs at Cloud Run's 4Gi default; see CLAUDE.md §8 for why) — these are deploy-time flags only, not captured in any config file here; don't lose it on a fresh redeploy.
 - `requirements-preprocess.txt` pins `opencv-python-headless==4.10.0.84` — do not let this float to latest
   (5.0.0.93 ships a broken wheel that crash-loops the container on startup).
 
@@ -157,9 +157,9 @@ Training-side GCP scripts: `scripts/01_setup_gcp.sh` … `04_submit_job.sh` (Ver
 
 ## Preserving the existing baseline
 The no-augmentation General ResNet-18 baseline (**B0**, single-image val acc 0.783) must not be deleted or
-overwritten. Preserve the checkpoint `checkpoints/resnet18_baseline.pt`; results are in `docs/modeling-plan.md`.
+overwritten. Preserve the checkpoint `checkpoints/resnet18_baseline.pt`; results are in `docs/modeling-plan.md` (local only; `docs/` is git-ignored).
 
 For detailed reproduced items / undisclosed items / results, see
-**[`docs/paper_reproduction_report.md`](docs/paper_reproduction_report.md)** and
-**[`docs/gcp-resnet18-results.md`](docs/gcp-resnet18-results.md)** (running the pipeline also regenerates an
+`docs/paper_reproduction_report.md` and `docs/gcp-resnet18-results.md` (local only; `docs/` is git-ignored)
+(running the pipeline also regenerates an
 updated copy of the former under `outputs/paper_reproduction/reports/`).
