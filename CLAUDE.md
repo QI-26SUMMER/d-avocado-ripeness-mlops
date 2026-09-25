@@ -2,7 +2,7 @@ CLAUDE.md — Avocado Ripeness Model
 
 The operating manual Claude Code reads when working in this repository. Current stage: training + serving.
 (EDA done; GCP Vertex custom training in place; a FastAPI prediction container runs on Cloud Run.)
-Next up: real-photo preprocessing for inference (detection/crop before the classifier).
+Real-photo preprocessing for inference (background removal/crop before the classifier) is live since 2026-07.
 
 
 Attitude: neural network training fails silently. No error — it just quietly hands you a slightly worse model.
@@ -140,7 +140,7 @@ Each group starts on a different date (they're separate cohorts). Always use Day
 Domain gap. Training images were shot in a lightbox (matte white background, 12,000 lm LED, 5500K, fixed exposure).
 Real users will shoot with a phone under kitchen lighting. Ripeness is judged by color, and lighting changes color.
 
-→ Apply aggressive color/lighting augmentation during training.
+→ Apply aggressive color/lighting augmentation during training. (Not done yet: current training uses the paper's geometric-only augmentation.)
 → Do not build preprocessing that depends on background uniformity (e.g., simple threshold-based segmentation).
 
 
